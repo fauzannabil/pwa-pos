@@ -4,30 +4,91 @@ import api from '../api/api';
 
 let syncInProgress = false;
 
-export async function saveLocalTransaction(transaction) {
+/*
+|--------------------------------
+| Save Local Transaction
+|--------------------------------
+*/
+
+export async function
+saveLocalTransaction(
+  transaction
+) {
 
   await db.transactions.add({
 
     ...transaction,
 
-    sync_status: 'pending',
+    sync_status:
+      'pending',
 
-    created_at: new Date(),
+    retry_count: 0,
+
+    last_error: null,
+
+    last_sync_at: null,
+
+    created_at:
+      new Date(),
 
   });
 
 }
 
-export async function getPendingTransactions() {
+/*
+|--------------------------------
+| Get Pending Transactions
+|--------------------------------
+*/
+
+export async function
+getPendingTransactions() {
 
   return await db.transactions
+
     .where('sync_status')
-    .anyOf('pending', 'failed')
+
+    .anyOf(
+      'pending',
+      'retry',
+      'failed'
+    )
+
     .toArray();
 
 }
 
-export async function syncPendingTransactions() {
+/*
+|--------------------------------
+| Count Pending Transactions
+|--------------------------------
+*/
+
+export async function
+countPendingTransactions() {
+
+  return await db.transactions
+
+    .where('sync_status')
+
+    .anyOf(
+      'pending',
+      'retry',
+      'failed'
+    )
+
+    .count();
+
+}
+
+/*
+|--------------------------------
+| Sync Pending Transactions
+|--------------------------------
+*/
+
+export async function
+syncPendingTransactions() {
 
   // prevent double sync
 
@@ -42,26 +103,70 @@ export async function syncPendingTransactions() {
   try {
 
     const pendingTransactions =
+
       await getPendingTransactions();
 
     let syncedCount = 0;
 
-    for (const trx of pendingTransactions) {
+    const MAX_RETRY = 10;
+
+    for (
+      const trx
+      of pendingTransactions
+    ) {
 
       try {
 
-        // tandai syncing
+        // max retry protection
+
+        if (
+
+          Number(
+            trx.retry_count || 0
+          ) >= MAX_RETRY
+
+        ) {
+
+          console.log(
+            'Max retry reached:',
+            trx.invoice
+          );
+
+          continue;
+
+        }
+
+        // set syncing status
 
         await db.transactions.update(
+
           trx.id,
+
           {
-            sync_status: 'syncing'
+
+            sync_status:
+              'syncing',
+
+            last_sync_at:
+              new Date(),
+
           }
+
         );
 
+        // sync to backend
+
         await api.post(
+
           '/pos-transactions',
+
           {
+
+            transaction_uuid:
+              trx.transaction_uuid,
+
+            cashier_id:
+              trx.cashier_id,
 
             invoice_no:
               trx.invoice_no,
@@ -88,20 +193,31 @@ export async function syncPendingTransactions() {
               trx.items,
 
           }
+
         );
 
-        // sukses sync
+        // success
 
         await db.transactions.update(
+
           trx.id,
+
           {
 
-            sync_status: 'synced',
+            sync_status:
+              'synced',
 
             synced_at:
               new Date(),
 
+            last_sync_at:
+              new Date(),
+
+            last_error:
+              null,
+
           }
+
         );
 
         syncedCount++;
@@ -110,33 +226,35 @@ export async function syncPendingTransactions() {
 
         console.log(error);
 
-        // jika offline/network error
-        // tetap pending agar retry lagi
+        // retry state
 
-        if (
-          error.message === 'Network Error'
-        ) {
+        await db.transactions.update(
 
-          await db.transactions.update(
-            trx.id,
-            {
-              sync_status: 'pending'
-            }
-          );
+          trx.id,
 
-        } else {
+          {
 
-          // jika validation/server error
-          // tandai failed
+            sync_status:
+              'retry',
 
-          await db.transactions.update(
-            trx.id,
-            {
-              sync_status: 'failed'
-            }
-          );
+            retry_count:
 
-        }
+              Number(
+                trx.retry_count || 0
+              ) + 1,
+
+            last_error:
+
+              error.message ||
+
+              'Sync failed',
+
+            last_sync_at:
+              new Date(),
+
+          }
+
+        );
 
       }
 
@@ -152,14 +270,37 @@ export async function syncPendingTransactions() {
 
 }
 
-export async function getTransactions() {
+/*
+|--------------------------------
+| Get Local Transactions
+|--------------------------------
+*/
+
+export async function
+getLocalTransactions() {
+
+  return await db.transactions
+
+    .orderBy('created_at')
+
+    .reverse()
+
+    .toArray();
+
+}
+
+/*
+|--------------------------------
+| Get Transactions
+|--------------------------------
+*/
+
+export async function
+getTransactions() {
 
   try {
 
-    const response =
-      await api.get('/transactions');
-
-    return response.data;
+    return await getLocalTransactions();
 
   } catch (error) {
 
@@ -171,11 +312,213 @@ export async function getTransactions() {
 
 }
 
-export async function getPendingCount() {
+/*
+|--------------------------------
+| Today Transactions
+|--------------------------------
+*/
 
-  return await db.transactions
-    .where('sync_status')
-    .notEqual('synced')
-    .count();
+export async function
+getTodayTransactions() {
+
+  const transactions =
+
+    await db.transactions
+      .toArray();
+
+  const today =
+
+    new Date()
+      .toISOString()
+      .slice(0, 10);
+
+  return transactions.filter(
+    (trx) =>
+
+      trx.transaction_time
+        ?.slice(0, 10)
+
+      ===
+
+      today
+  );
+
+}
+
+/*
+|--------------------------------
+| Today Revenue
+|--------------------------------
+*/
+
+export async function
+getTodayRevenue() {
+
+  const transactions =
+
+    await getTodayTransactions();
+
+  return transactions.reduce(
+
+    (total, trx) =>
+
+      total +
+
+      Number(
+        trx.total || 0
+      ),
+
+    0
+
+  );
+
+}
+
+/*
+|--------------------------------
+| Top Products
+|--------------------------------
+*/
+
+export async function
+getTopProducts() {
+
+  const transactions =
+
+    await db.transactions
+      .toArray();
+
+  const map = {};
+
+  for (const trx of transactions) {
+
+    for (
+      const item
+      of trx.items || []
+    ) {
+
+      const name =
+
+        item.product_title ||
+
+        item.product?.title ||
+
+        'Unknown';
+
+      if (!map[name]) {
+
+        map[name] = 0;
+
+      }
+
+      map[name] +=
+
+        Number(item.qty);
+
+    }
+
+  }
+
+  return Object.entries(map)
+
+    .sort(
+      (a, b) => b[1] - a[1]
+    )
+
+    .slice(0, 5);
+
+}
+
+/*
+|--------------------------------
+| Get Pending Count
+|--------------------------------
+*/
+
+export async function
+getPendingCount() {
+
+  const transactions =
+
+    await db.transactions
+      .where('sync_status')
+      .equals('pending')
+      .toArray();
+
+  return transactions.length;
+
+}
+
+/*
+|--------------------------------
+| Weekly Sales
+|--------------------------------
+*/
+
+export async function
+getWeeklySales() {
+
+  const transactions =
+
+    await db.transactions
+      .toArray();
+
+  const result = [];
+
+  for (let i = 6; i >= 0; i--) {
+
+    const date =
+
+      new Date();
+
+    date.setDate(
+      date.getDate() - i
+    );
+
+    const day =
+
+      date.toISOString()
+        .slice(0, 10);
+
+    const dailyTransactions =
+
+      transactions.filter(
+        (trx) =>
+
+          trx.transaction_time
+            ?.slice(0, 10)
+
+          ===
+
+          day
+      );
+
+    const total =
+
+      dailyTransactions.reduce(
+
+        (sum, trx) =>
+
+          sum +
+
+          Number(
+            trx.total || 0
+          ),
+
+        0
+
+      );
+
+    result.push({
+
+      day,
+
+      total,
+
+    });
+
+  }
+
+  return result;
 
 }

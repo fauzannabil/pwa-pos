@@ -2,68 +2,231 @@ import api from '../api/api';
 
 import db from '../db/db';
 
-const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL;
+/*
+|--------------------------------
+| Convert Image To Base64
+|--------------------------------
+*/
 
-export async function syncProducts() {
+async function imageToBase64(url) {
 
   try {
 
-    const response = await api.get('/products');
+    const response = await fetch(url, {
 
-    const products = response.data.map((product) => ({
-      ...product,
-      image: product.image
-        ? product.image.replace(
-            'http://localhost:8000',BACKEND_URL
-         )
-        : null,
+      mode: 'cors',
 
-    }));
+      cache: 'no-cache',
 
-    await db.products.clear();
+    });
 
-    await db.products.bulkPut(products);
+    if (!response.ok) {
 
-    console.log('Products synced');
+      return null;
+
+    }
+
+    const blob =
+      await response.blob();
+
+    return await new Promise(
+      (resolve) => {
+
+        const reader =
+          new FileReader();
+
+        reader.onloadend =
+          () => {
+
+            resolve(
+              reader.result
+            );
+
+          };
+
+        reader.readAsDataURL(
+          blob
+        );
+
+      }
+    );
 
   } catch (error) {
 
-    console.log(error);
+    console.log(
+      'Image cache failed:',
+      error
+    );
+
+    return null;
 
   }
 
 }
 
-export async function getLocalProducts() {
+/*
+|--------------------------------
+| Sync Products
+|--------------------------------
+*/
 
-  return await db.products.toArray();
+export async function syncProducts() {
+
+  if (!navigator.onLine) {
+
+    console.log(
+      'Offline mode'
+    );
+
+    return;
+
+  }
+
+  try {
+
+    const response =
+      await api.get(
+        '/products'
+      );
+
+    /*
+    Laravel Resource:
+    {
+      data: [...]
+    }
+    */
+
+    const apiProducts =
+
+      response.data.data;
+
+    const products = [];
+
+    for (
+      const product
+      of apiProducts
+    ) {
+
+      let imageBase64 =
+        null;
+
+      try {
+
+        if (product.image) {
+
+          imageBase64 =
+
+            await imageToBase64(
+              product.image
+            );
+
+        }
+
+      } catch (error) {
+
+        console.log(
+          'Image failed:',
+          product.id
+        );
+
+      }
+
+      products.push({
+
+        ...product,
+
+        image:
+          imageBase64,
+
+      });
+
+    }
+
+    await db.products.clear();
+
+    await db.products.bulkPut(
+      products
+    );
+
+    console.log(
+      'Products synced'
+    );
+
+  } catch (error) {
+
+    console.log(
+      'SYNC ERROR:',
+      error
+    );
+
+  }
 
 }
 
-export async function reduceLocalStock(items) {
+/*
+|--------------------------------
+| Get Local Products
+|--------------------------------
+*/
+
+export async function
+getLocalProducts() {
+
+  return await db.products
+    .toArray();
+
+}
+
+/*
+|--------------------------------
+| Reduce Local Stock
+|--------------------------------
+*/
+
+export async function
+reduceLocalStock(items) {
 
   for (const item of items) {
 
     const product =
-      await db.products.get(item.product_id);
 
-    if (!product) continue;
+      await db.products.get(
+        item.product_id
+      );
+
+    if (!product) {
+
+      continue;
+
+    }
 
     const currentStock =
-      Number(product.stock || 0);
+
+      Number(
+        product.stock || 0
+      );
 
     const qty =
-      Number(item.qty || 0);
+
+      Number(
+        item.qty || 0
+      );
 
     const newStock =
-      Math.max(0, currentStock - qty);
+
+      Math.max(
+        0,
+        currentStock - qty
+      );
 
     await db.products.update(
+
       item.product_id,
+
       {
         stock: newStock,
       }
+
     );
 
   }

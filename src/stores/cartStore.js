@@ -1,139 +1,288 @@
-import { create } from 'zustand';
+import { create }
+from 'zustand';
 
-const useCartStore = create((set) => ({
+const savedCart =
 
-  items: [],
+  JSON.parse(
 
-  /*
-  |--------------------------------------------------
-  | Add Item
-  |--------------------------------------------------
-  */
+    localStorage.getItem(
+      'pos-cart'
+    ) || '[]'
 
-  addItem: (product) =>
-    set((state) => {
+  );
 
-      const existing = state.items.find(
-        (item) => item.id === product.id
+const useCartStore =
+
+  create((set, get) => ({
+
+    items: savedCart,
+
+    /*
+    |--------------------------------
+    | Save Cart Helper
+    |--------------------------------
+    */
+
+    saveCart: (items) => {
+
+      localStorage.setItem(
+
+        'pos-cart',
+
+        JSON.stringify(items)
+
       );
 
-      // jika item sudah ada
-      if (existing) {
+    },
 
-        // cegah melebihi stock
-        if (existing.qty >= product.stock) {
+    /*
+    |--------------------------------
+    | Add Item
+    |--------------------------------
+    */
 
-          return state;
+    addItem: (product) =>
 
-        }
+      set((state) => {
 
-        return {
+        const existing =
 
-          items: state.items.map((item) =>
+          state.items.find(
 
-            item.id === product.id
-              ? {
-                  ...item,
-                  qty: item.qty + 1
-                }
-              : item
+            (item) =>
 
-          ),
+              item.id ===
+              product.id
 
-        };
+          );
 
-      }
+        let newItems = [];
 
-      // jika stock kosong
-      if (product.stock <= 0) {
+        // existing item
 
-        return state;
+        if (existing) {
 
-      }
+          if (
 
-      return {
+            existing.qty >=
+            product.stock
 
-        items: [
+          ) {
 
-          ...state.items,
+            return state;
 
-          {
-            ...product,
-            qty: 1,
           }
 
-        ],
+          newItems =
 
-      };
+            state.items.map(
 
-    }),
+              (item) =>
 
-  /*
-  |--------------------------------------------------
-  | Increase Qty
-  |--------------------------------------------------
-  */
+                item.id ===
+                product.id
 
-  increaseQty: (id) =>
-    set((state) => ({
+                  ? {
 
-      items: state.items.map((item) => {
+                      ...item,
 
-        if (item.id !== id) {
-          return item;
+                      qty:
+                        item.qty + 1,
+
+                    }
+
+                  : item
+
+            );
+
+        } else {
+
+          // stock empty
+
+          if (
+
+            product.stock <= 0
+
+          ) {
+
+            return state;
+
+          }
+
+          newItems = [
+
+            ...state.items,
+
+            {
+
+              ...product,
+
+              qty: 1,
+
+            },
+
+          ];
+
         }
 
-        // cegah melebihi stock
-        if (item.qty >= item.stock) {
-          return item;
-        }
+        localStorage.setItem(
+
+          'pos-cart',
+
+          JSON.stringify(
+            newItems
+          )
+
+        );
 
         return {
-          ...item,
-          qty: item.qty + 1
+
+          items: newItems,
+
         };
 
       }),
 
-    })),
+    /*
+    |--------------------------------
+    | Increase Qty
+    |--------------------------------
+    */
 
-  /*
-  |--------------------------------------------------
-  | Decrease Qty
-  |--------------------------------------------------
-  */
+    increaseQty: (id) =>
 
-  decreaseQty: (id) =>
-    set((state) => ({
+      set((state) => {
 
-      items: state.items
-        .map((item) =>
+        const newItems =
 
-          item.id === id
-            ? {
-                ...item,
-                qty: item.qty - 1
+          state.items.map(
+
+            (item) => {
+
+              if (
+                item.id !== id
+              ) {
+
+                return item;
+
               }
-            : item
 
-        )
-        .filter((item) => item.qty > 0),
+              if (
+                item.qty >=
+                item.stock
+              ) {
 
-    })),
+                return item;
 
-  /*
-  |--------------------------------------------------
-  | Clear Cart
-  |--------------------------------------------------
-  */
+              }
 
-  clearCart: () =>
-    set({
+              return {
 
-      items: [],
+                ...item,
 
-    }),
+                qty:
+                  item.qty + 1,
 
-}));
+              };
+
+            }
+
+          );
+
+        localStorage.setItem(
+
+          'pos-cart',
+
+          JSON.stringify(
+            newItems
+          )
+
+        );
+
+        return {
+
+          items: newItems,
+
+        };
+
+      }),
+
+    /*
+    |--------------------------------
+    | Decrease Qty
+    |--------------------------------
+    */
+
+    decreaseQty: (id) =>
+
+      set((state) => {
+
+        const newItems =
+
+          state.items
+
+            .map((item) =>
+
+              item.id === id
+
+                ? {
+
+                    ...item,
+
+                    qty:
+                      item.qty - 1,
+
+                  }
+
+                : item
+
+            )
+
+            .filter(
+
+              (item) =>
+                item.qty > 0
+
+            );
+
+        localStorage.setItem(
+
+          'pos-cart',
+
+          JSON.stringify(
+            newItems
+          )
+
+        );
+
+        return {
+
+          items: newItems,
+
+        };
+
+      }),
+
+    /*
+    |--------------------------------
+    | Clear Cart
+    |--------------------------------
+    */
+
+    clearCart: () => {
+
+      localStorage.removeItem(
+        'pos-cart'
+      );
+
+      set({
+
+        items: [],
+
+      });
+
+    },
+
+  }));
 
 export default useCartStore;

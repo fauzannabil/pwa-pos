@@ -4,27 +4,40 @@ import {
 } from 'react';
 
 import {
-  getTransactions
+  getTransactions,
+  getLocalTransactions
 } from '../services/transactionService';
 
 export default function
 TransactionHistoryPage() {
 
-  const [transactions,
-    setTransactions] = useState([]);
+  const [
+    transactions,
+    setTransactions
+  ] = useState([]);
 
-  async function loadTransactions() {
+  async function
+  loadTransactions() {
 
     try {
 
       const data =
         await getTransactions();
 
-      setTransactions(data);
+      setTransactions(
+        data || []
+      );
 
     } catch (error) {
 
       console.log(error);
+
+      const localTransactions =
+        await getLocalTransactions();
+
+      setTransactions(
+        localTransactions || []
+      );
 
     }
 
@@ -55,7 +68,10 @@ TransactionHistoryPage() {
         {transactions.map((trx) => (
 
           <div
-            key={trx.id}
+            key={
+              trx.id ||
+              trx.transaction_uuid
+            }
             className="
               bg-white
               rounded-xl
@@ -80,7 +96,46 @@ TransactionHistoryPage() {
                   "
                 >
 
-                  {trx.invoice}
+                  {
+                    trx.invoice ||
+                    trx.invoice_no
+                  }
+
+                </div>
+
+                <div className="flex gap-2 items-center mt-1">
+
+                  <div
+                    className={`
+                      text-xs
+                      px-2
+                      py-1
+                      rounded-full
+                      text-white
+
+                      ${
+                        trx.sync_status === 'synced'
+                          ? 'bg-green-500'
+
+                          : trx.sync_status === 'failed'
+                          ? 'bg-red-500'
+
+                          : 'bg-orange-500'
+                      }
+                    `}
+                  >
+
+                    {
+                      trx.sync_status === 'synced'
+                        ? 'SYNCED'
+
+                        : trx.sync_status === 'failed'
+                        ? 'FAILED'
+
+                        : 'PENDING'
+                    }
+
+                  </div>
 
                 </div>
 
@@ -88,11 +143,19 @@ TransactionHistoryPage() {
                   className="
                     text-gray-500
                     text-sm
+                    mt-1
                   "
                 >
 
+                  PIC:
+                  {' '}
+
                   {
-                    trx.cashier?.name
+                    trx.cashier?.name ||
+
+                    trx.cashier_name ||
+
+                    '-'
                   }
 
                 </div>
@@ -113,9 +176,15 @@ TransactionHistoryPage() {
                 >
 
                   Rp {
+
                     Number(
-                      trx.grand_total
+
+                      trx.grand_total ||
+                      trx.total ||
+                      0
+
                     ).toLocaleString()
+
                   }
 
                 </div>
@@ -127,7 +196,21 @@ TransactionHistoryPage() {
                   "
                 >
 
-                  {trx.created_at}
+{
+
+                  trx.created_at
+                    ? new Date(
+                        trx.created_at
+                      ).toLocaleString()
+
+                    : trx.transaction_time
+                    ? new Date(
+                        trx.transaction_time
+                      ).toLocaleString()
+
+                    : '-'
+
+                }
 
                 </div>
 
@@ -137,45 +220,74 @@ TransactionHistoryPage() {
 
             <div className="mt-4">
 
-              {trx.details.map((item) => (
+              {
 
-                <div
-                  key={item.id}
-                  className="
-                    flex
-                    justify-between
-                    text-sm
-                    border-t
-                    py-1
-                  "
-                >
+                (
+                  trx.details ||
 
-                  <div>
+                  trx.items ||
 
-                    {
-                      item.product?.title
+                  []
+                )
+
+                .map((item, index) => (
+
+                  <div
+                    key={
+                      item.id || index
                     }
+                    className="
+                      flex
+                      justify-between
+                      text-sm
+                      border-t
+                      py-1
+                    "
+                  >
 
-                    {' '}
-                    x
-                    {' '}
-                    {item.qty}
+                    <div>
+
+                      {
+
+                        item.product?.name ||
+
+                        item.product_name ||
+
+                        item.title ||
+
+                        'Unknown Product'
+
+                      }
+
+                      {' '}
+
+                      x
+
+                      {' '}
+
+                      {item.qty}
+
+                    </div>
+
+                    <div>
+
+                      Rp {
+
+                        Number(
+
+                          item.price || 0
+
+                        ).toLocaleString()
+
+                      }
+
+                    </div>
 
                   </div>
 
-                  <div>
+                ))
 
-                    Rp {
-                      Number(
-                        item.price
-                      ).toLocaleString()
-                    }
-
-                  </div>
-
-                </div>
-
-              ))}
+              }
 
             </div>
 

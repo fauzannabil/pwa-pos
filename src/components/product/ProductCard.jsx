@@ -1,56 +1,144 @@
-export default function ProductCard({ product, onClick }) {
+function ProductCard({
+  product,
+  onClick
+}) {
 
   return (
 
-    <button
-
+    <div
       onClick={onClick}
-       disabled={product.stock <= 0}
-
       className="
         bg-white
-        rounded-2xl
-        shadow-sm
+        rounded-xl
+        shadow
         hover:shadow-lg
         transition
-        p-4
-        text-left
-        w-full
+        cursor-pointer
+        overflow-hidden
+        border
       "
-
     >
 
-<img
-  src={product.image}
-  alt={product.title}
-  onError={(e) => {
-    e.target.src =
-      'https://placehold.co/300x300?text=No+Image';
-  }}
+      <div
+        className="
+          h-40
+          bg-gray-100
+          flex
+          items-center
+          justify-center
+          overflow-hidden
+        "
+      >
 
-  className="
-    w-full
-    h-40
-    object-cover
-    rounded-xl
-    mb-3
-  "
-/>
+        {
 
-      <div className="font-bold text-lg">
-        {product.title}
+          product.image
+
+            ? (
+
+              <img
+
+                src={product.image}
+
+                alt={product.title}
+
+                loading="lazy"
+
+                decoding="async"
+
+                className="
+                  w-full
+                  h-full
+                  object-cover
+                "
+
+              />
+
+            )
+
+            : (
+
+              <div
+                className="
+                  text-gray-400
+                  text-sm
+                "
+              >
+
+                No Image
+
+              </div>
+
+            )
+
+        }
+
       </div>
 
-      <div className="text-blue-600 font-semibold mt-1">
-        Rp {Number(product.sell_price).toLocaleString()}
+      <div
+        className="
+          p-3
+        "
+      >
+
+        <h2
+          className="
+            font-semibold
+            text-sm
+            line-clamp-2
+            min-h-[40px]
+          "
+        >
+
+          {product.title}
+
+        </h2>
+
+        <div
+          className="
+            mt-2
+            flex
+            justify-between
+            items-center
+          "
+        >
+
+          <div
+            className="
+              text-green-600
+              font-bold
+            "
+          >
+
+            Rp
+            {' '}
+            {Number(
+              product.sell_price || 0
+            ).toLocaleString()}
+
+          </div>
+
+          <div
+            className="
+              text-xs
+              text-gray-500
+            "
+          >
+
+            Stock:
+            {' '}
+            {product.stock}
+
+          </div>
+
+        </div>
+
       </div>
 
-      <div className="text-sm text-gray-500 mt-1">
-        Stock: {product.stock <= 0 ? 'Out of Stock' : product.stock}
-      </div>
+    </div>
 
-    </button>
-
-  )
+  );
 
 }
+
+export default ProductCard;

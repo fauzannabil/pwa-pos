@@ -14,8 +14,8 @@ import { useEffect } from 'react';
 import useAuthStore  from './stores/authStore';
 import { me } from './services/authService';
 import TransactionHistoryPage from './pages/TransactionHistoryPage';
-
-
+import SyncDashboardPage from './pages/SyncDashboardPage';
+import DashboardPage   from './pages/DashboardPage';
 
 export default function App() {
 
@@ -96,6 +96,21 @@ const authLogin =
         <Route
           path="*"
           element={<Navigate to="/" />}
+        />
+
+
+        <Route
+          path="/sync-dashboard"
+          element={
+            <SyncDashboardPage />
+          }
+        />
+
+        <Route
+          path="/dashboard"
+          element={
+            <DashboardPage />
+          }
         />
 
       </Routes>

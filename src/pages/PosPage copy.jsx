@@ -1,79 +1,238 @@
-import { useEffect, useState, useRef } from 'react';
+import {
+  useEffect,
+  useState,
+  useRef
+} from 'react';
 
-import useCartStore from '../stores/cartStore';
-import useAuthStore from '../stores/authStore';
+import {
+  Link
+} from 'react-router-dom';
 
-import PosLayout from '../components/layout/PosLayout';
-import ProductCard from '../components/product/ProductCard';
-import CartPanel from '../components/cart/CartPanel';
-import ProductSearch from '../components/product/ProductSearch';
-import LogoutButton from '../components/auth/LogoutButton';
-import Receipt from '../components/receipt/Receipt';
+import useCartStore
+from '../stores/cartStore';
+
+import useAuthStore
+from '../stores/authStore';
+
+import PosLayout
+from '../components/layout/PosLayout';
+
+import ProductCard
+from '../components/product/ProductCard';
+
+import CartPanel
+from '../components/cart/CartPanel';
+
+import ProductSearch
+from '../components/product/ProductSearch';
+
+import LogoutButton
+from '../components/auth/LogoutButton';
+
+import Receipt
+from '../components/receipt/Receipt';
+
 import {
   syncProducts,
   getLocalProducts,
   reduceLocalStock
 } from '../services/productService';
+
 import {
   saveLocalTransaction,
-  syncPendingTransactions,getPendingCount,
+  syncPendingTransactions,
+  countPendingTransactions
 } from '../services/transactionService';
 
-import { Link } from 'react-router-dom';
-import useSyncStore from '../stores/syncStore';
 
-export default function PosPage() {
-  const API_URL =  import.meta.env.VITE_API_URL;
 
-  const [products, setProducts] =
-    useState([]);
+export default function
+PosPage() {
 
-  const [keyword, setKeyword] =
-    useState('');
+  const [
+    products,
+    setProducts
+  ] = useState([]);
 
-  const [loadingCheckout,
-    setLoadingCheckout] =
-      useState(false);
+  const [
+    keyword,
+    setKeyword
+  ] = useState('');
 
-  const [paymentMethod,
-    setPaymentMethod] =
-      useState('cash');
+  const [
+    loadingCheckout,
+    setLoadingCheckout
+  ] = useState(false);
 
-  const [paidAmount,
-    setPaidAmount] =
-      useState(0);
+  const [
+    paymentMethod,
+    setPaymentMethod
+  ] = useState('cash');
 
-  const [selectedCustomer,
-    setSelectedCustomer] =
-      useState(null);
-  
-  const [serverOnline, setServerOnline] =
-      useState(true);
-  
-  const [pendingCount, setPendingCount] =
-    useState(0);
+  const [
+    paidAmount,
+    setPaidAmount
+  ] = useState(0);
 
-  const [lastTransaction,
-    setLastTransaction] =
-      useState(null);
+  const [
+    selectedCustomer,
+    setSelectedCustomer
+  ] = useState(null);
+
+  const [
+    pendingCount,
+    setPendingCount
+  ] = useState(0);
+
+  const [
+    serverOnline,
+    setServerOnline
+  ] = useState(
+    navigator.onLine
+  );
+
+  const [
+    lastTransaction,
+    setLastTransaction
+  ] = useState(null);
 
   const user =
     useAuthStore(
-      (state) => state.user
+      (state) =>
+        state.user
     );
 
-/*     async function checkServer() {
-      try {
-        await api.get('/ping');
-        setServerOnline(true);
-      } catch (error) {
-        setServerOnline(false);
-      }
-    } */
+  const addItem =
+    useCartStore(
+      (state) =>
+        state.addItem
+    );
 
-  async function checkServer() {
-      try {
-        const response = await fetch(
+  const cartItems =
+    useCartStore(
+      (state) =>
+        state.items
+    );
+
+  const increaseQty =
+    useCartStore(
+      (state) =>
+        state.increaseQty
+    );
+
+  const decreaseQty =
+    useCartStore(
+      (state) =>
+        state.decreaseQty
+    );
+
+  const clearCart =
+    useCartStore(
+      (state) =>
+        state.clearCart
+    );
+
+  const receiptRef =
+    useRef();
+
+  /*
+  |--------------------------------
+  | Load Products
+  |--------------------------------
+  */
+
+async function
+loadProducts() {
+
+  /*
+  |-----------------------------
+  | Load local FIRST
+  |-----------------------------
+  */
+
+  const localProducts =
+
+    await getLocalProducts();
+
+  if (localProducts.length > 0) {
+
+    setProducts(
+      localProducts
+    );
+
+  }
+
+  /*
+  |-----------------------------
+  | Background Sync
+  |-----------------------------
+  */
+
+  syncProducts()
+
+    .then(async () => {
+
+      const updatedProducts =
+
+        await getLocalProducts();
+
+      setProducts(
+        updatedProducts
+      );
+
+      console.log(
+        'Background sync done'
+      );
+
+    })
+
+    .catch((error) => {
+
+      console.log(error);
+
+    });
+
+}
+
+  /*
+  |--------------------------------
+  | Pending Count
+  |--------------------------------
+  */
+
+  async function
+  refreshPendingCount() {
+
+    const count =
+
+      await countPendingTransactions();
+
+    setPendingCount(
+      count
+    );
+
+  }
+
+  /*
+  |--------------------------------
+  | Check Backend
+  |--------------------------------
+  */
+
+  async function
+  checkBackendOnline() {
+
+    try {
+
+      const API_URL =
+
+        import.meta.env
+          .VITE_API_URL;
+
+      const response =
+
+        await fetch(
+
           `${API_URL}/ping`,
 
           {
@@ -81,403 +240,71 @@ export default function PosPage() {
           }
 
         );
-        if (response.ok) {
-          setServerOnline(true);
-        } else {
-          setServerOnline(false);
-        }
-      } catch (error) {
-        setServerOnline(false);
-      }
-    }
 
-  const addItem =
-    useCartStore(
-      (state) => state.addItem
-    );
+      const online =
+        response.ok;
 
-  const cartItems =
-    useCartStore(
-      (state) => state.items
-    );
-
-  const increaseQty =
-    useCartStore(
-      (state) => state.increaseQty
-    );
-
-  const decreaseQty =
-    useCartStore(
-      (state) => state.decreaseQty
-    );
-
-  const clearCart =
-    useCartStore(
-      (state) => state.clearCart
-    );
-
-  const receiptRef = useRef();
-
-  const online =
-  useSyncStore(
-    (state) => state.online
-  );
-
-  const setOnline =
-  useSyncStore(
-    (state) => state.setOnline
-  );
-  
-  async function refreshPendingCount() {
-    const count =
-      await getPendingCount();
-    setPendingCount(count);
-  }
-
-  useEffect(() => {
-      checkServer();
-      const interval = setInterval(() => {
-        checkServer();
-      }, 5000);
-      return () => clearInterval(interval);
-    }, []);
-
-  // load products
-
-  useEffect(() => {
-
-    async function loadProducts() {
-
-      await syncProducts();
-
-      const localProducts =
-        await getLocalProducts();
-
-      setProducts(localProducts);
-
-    }
-
-    loadProducts();
-    refreshPendingCount();
-
-  }, []);
-
-  // subtotal
-
-  const subtotal =
-    cartItems.reduce(
-
-      (total, item) => {
-
-        return total +
-          (
-            item.sell_price *
-            item.qty
-          );
-
-      },
-
-      0
-
-    );
-
-  // change
-
-  const changeAmount =
-    Math.max(
-      0,
-      paidAmount - subtotal
-    );
-
-  // print
-
-  function handlePrint() {
-
-    window.print();
-
-  }
-
-  // checkout
-
-  async function handleCheckout() {
-
-    if (
-      paymentMethod === 'cash'
-    ) {
-
-      if (
-        paidAmount < subtotal
-      ) {
-
-        alert(
-          'Cash is not enough'
-        );
-
-        return;
-
-      }
-
-    }
-
-    // prevent double click
-
-    if (loadingCheckout)
-      return;
-
-    // cart empty
-
-    if (
-      cartItems.length === 0
-    ) {
-
-      return;
-
-    }
-
-    setLoadingCheckout(true);
-
-    try {
-
-      const transaction = {
-
-        invoice_no:
-
-          'INV-' +
-
-          Date.now() +
-
-          '-' +
-
-          Math.floor(
-            Math.random() * 1000
-          ),
-
-        customer_id:
-
-          selectedCustomer?.id
-          ?? null,
-
-        payment_method:
-
-          paymentMethod,
-
-        paid_amount:
-
-          paymentMethod ===
-          'cash'
-
-            ? paidAmount
-
-            : subtotal,
-
-        change_amount:
-
-          changeAmount,
-
-        total:
-
-          subtotal,
-
-        transaction_time:
-
-          new Date()
-            .toISOString(),
-
-        items:
-
-          cartItems.map(
-            item => ({
-
-              product_id:
-                item.id,
-
-              qty:
-                item.qty,
-
-              price:
-                item.sell_price,
-
-            })
-          ),
-
-      };
-
-      // save local
-
-      await saveLocalTransaction(
-        transaction
+      setServerOnline(
+        online
       );
 
-      await reduceLocalStock(
-        transaction.items
-      );
-
-      // save receipt data
-
-      setLastTransaction(
-        transaction
-      );
-
-      // sync server
-
-      const synced =
-        await syncPendingTransactions();
-
-      console.log(
-        'Synced:',
-        synced
-      );
-
-      await refreshPendingCount();
-      // reload products
-
-      await syncProducts();
-
-      const localProducts =
-        await getLocalProducts();
-
-      setProducts(localProducts);
-      await refreshPendingCount();
-      // clear cart
-
-      clearCart();
-
-      // print receipt
-
-      setTimeout(() => {
-
-        handlePrint();
-
-      }, 300);
-
-      alert(
-        'Transaction success'
-      );
+      return online;
 
     } catch (error) {
 
-      console.log(error);
-
-      alert(
-        'Transaction failed'
+      setServerOnline(
+        false
       );
 
-    } finally {
-
-      setLoadingCheckout(false);
+      return false;
 
     }
 
   }
 
-  // auto add barcode
+  /*
+  |--------------------------------
+  | Initial Load
+  |--------------------------------
+  */
 
   useEffect(() => {
 
-    if (!keyword) return;
+    async function init() {
 
-    const exactProduct =
-      products.find(
-        (product) =>
+      loadProducts();
 
-          (
-            product.barcode || ''
-          )
-          .toLowerCase()
+      await refreshPendingCount();
 
-          ===
-
-          keyword.toLowerCase()
-      );
-
-    if (exactProduct) {
-
-      addItem(exactProduct);
-
-      setKeyword('');
+      await checkBackendOnline();
 
     }
 
-  }, [
-    keyword,
-    products,
-    addItem
-  ]);
-
-  // filter product
-
-  const filteredProducts =
-    products.filter(
-      (product) => {
-
-        const search =
-          keyword.toLowerCase();
-
-        return (
-
-          (
-            product.title || ''
-          )
-          .toLowerCase()
-          .includes(search)
-
-          ||
-
-          (
-            product.barcode || ''
-          )
-          .toLowerCase()
-          .includes(search)
-
-        );
-
-      }
-    );
-
-  // auto sync online
-
-  useEffect(() => {
-
-    async function handleOnline() {
-
-      await syncPendingTransactions();
-
-      await syncProducts();
-
-      const localProducts =
-        await getLocalProducts();
-
-      setProducts(localProducts);
-
-    }
-
-    window.addEventListener(
-      'online',
-      handleOnline
-    );
-
-    return () => {
-
-      window.removeEventListener(
-        'online',
-        handleOnline
-      );
-
-    };
+    init();
 
   }, []);
+
+  /*
+  |--------------------------------
+  | Online Offline Listener
+  |--------------------------------
+  */
 
   useEffect(() => {
 
     function handleOnline() {
 
-      setOnline(true);
+      setServerOnline(
+        true
+      );
 
     }
 
     function handleOffline() {
 
-      setOnline(false);
+      setServerOnline(
+        false
+      );
 
     }
 
@@ -507,29 +334,334 @@ export default function PosPage() {
 
   }, []);
 
-  useEffect(() => {
+  /*
+  |--------------------------------
+  | Subtotal
+  |--------------------------------
+  */
 
-      const interval = setInterval(
-        async () => {
+  const subtotal =
 
-          if (navigator.onLine) {
+    cartItems.reduce(
 
-            await syncPendingTransactions();
+      (total, item) => {
 
-          }
+        return total +
 
-        },
+          (
+            item.sell_price *
+            item.qty
+          );
 
-        30000
-      );
+      },
 
-      return () => {
+      0
 
-        clearInterval(interval);
+    );
+
+  /*
+  |--------------------------------
+  | Change Amount
+  |--------------------------------
+  */
+
+  const changeAmount =
+
+    Math.max(
+
+      0,
+
+      paidAmount -
+      subtotal
+
+    );
+
+  /*
+  |--------------------------------
+  | Print Receipt
+  |--------------------------------
+  */
+
+  function handlePrint() {
+
+    window.print();
+
+  }
+
+  /*
+  |--------------------------------
+  | Checkout
+  |--------------------------------
+  */
+
+  async function
+  handleCheckout() {
+
+    // empty cart
+
+    if (
+      cartItems.length === 0
+    ) {
+
+      return;
+
+    }
+
+    // prevent double click
+
+    if (loadingCheckout) {
+
+      return;
+
+    }
+
+    // cash validation
+
+    if (
+
+      paymentMethod ===
+      'cash'
+
+    ) {
+
+      if (
+        paidAmount <
+        subtotal
+      ) {
+
+        alert(
+          'Cash is not enough'
+        );
+
+        return;
+
+      }
+
+    }
+
+    setLoadingCheckout(
+      true
+    );
+
+    try {
+
+      const transaction = {
+
+        invoice_no:
+
+          'INV-' +
+
+          Date.now() +
+
+          '-' +
+
+          Math.floor(
+            Math.random() * 1000
+          ),
+
+        customer_id:
+
+          selectedCustomer?.id
+          ?? null,
+
+        payment_method:
+          paymentMethod,
+
+        paid_amount:
+
+          paymentMethod ===
+          'cash'
+
+            ? paidAmount
+
+            : subtotal,
+
+        change_amount:
+          changeAmount,
+
+        total:
+          subtotal,
+
+        transaction_time:
+
+          new Date()
+            .toISOString(),
+
+        items:
+
+          cartItems.map(
+            (item) => ({
+
+              product_id:
+                item.id,
+
+              qty:
+                item.qty,
+
+              price:
+                item.sell_price,
+
+            })
+          ),
 
       };
 
-  }, []);
+      // save local transaction
+
+      await saveLocalTransaction(
+        transaction
+      );
+
+      // reduce local stock
+
+      await reduceLocalStock(
+        transaction.items
+      );
+
+      // save receipt data
+
+      setLastTransaction(
+        transaction
+      );
+
+      // sync if online
+
+      if (navigator.onLine) {
+
+        await syncPendingTransactions();
+
+      }
+
+      // reload products
+
+      await loadProducts();
+
+      // refresh pending
+
+      await refreshPendingCount();
+
+      // clear cart
+
+      clearCart();
+
+      // print receipt
+
+      setTimeout(() => {
+
+        handlePrint();
+
+      }, 300);
+
+      alert(
+        'Transaction success'
+      );
+
+    } catch (error) {
+
+      console.log(error);
+
+      alert(
+        'Transaction failed'
+      );
+
+    } finally {
+
+      setLoadingCheckout(
+        false
+      );
+
+    }
+
+  }
+
+  /*
+  |--------------------------------
+  | Auto Barcode
+  |--------------------------------
+  */
+
+  useEffect(() => {
+
+    if (!keyword) {
+
+      return;
+
+    }
+
+    const exactProduct =
+
+      products.find(
+        (product) =>
+
+          (
+            product.barcode || ''
+          )
+
+          .toLowerCase()
+
+          ===
+
+          keyword.toLowerCase()
+
+      );
+
+    if (exactProduct) {
+
+      addItem(
+        exactProduct
+      );
+
+      setKeyword('');
+
+    }
+
+  }, [
+
+    keyword,
+    products,
+    addItem
+
+  ]);
+
+  /*
+  |--------------------------------
+  | Filter Products
+  |--------------------------------
+  */
+
+  const filteredProducts =
+
+    products.filter(
+      (product) => {
+
+        const search =
+
+          keyword.toLowerCase();
+
+        return (
+
+          (
+            product.title || ''
+          )
+
+          .toLowerCase()
+
+          .includes(search)
+
+          ||
+
+          (
+            product.barcode || ''
+          )
+
+          .toLowerCase()
+
+          .includes(search)
+
+        );
+
+      }
+    );
 
   return (
 
@@ -558,7 +690,9 @@ export default function PosPage() {
                     font-bold
                   "
                 >
+
                   POS SYSTEM
+
                 </h1>
 
                 <div
@@ -572,17 +706,22 @@ export default function PosPage() {
                   {user?.name}
 
                 </div>
+
                 <div
                   className={
                     serverOnline
+
                       ? 'text-green-600 font-bold'
+
                       : 'text-red-600 font-bold'
                   }
                 >
 
                   {
                     serverOnline
+
                       ? 'ONLINE'
+
                       : 'OFFLINE'
                   }
 
@@ -627,40 +766,75 @@ export default function PosPage() {
 
                 </Link>
 
+                <Link
+                  to="/sync-dashboard"
+                  className="
+                    bg-orange-600
+                    text-white
+                    px-3
+                    py-2
+                    rounded-lg
+                    text-sm
+                  "
+                >
+
+                  Sync
+
+                </Link>
+
                 <LogoutButton />
 
               </div>
 
             </div>
-        
+
             <ProductSearch
+
               keyword={keyword}
-              setKeyword={setKeyword}
+
+              setKeyword={
+                setKeyword
+              }
+
             />
 
-            <div
-              className="
-                grid
-                grid-cols-3
-                gap-4
-              "
-            >
+        <div
+          className="
+            grid
+            grid-cols-3
+            gap-4
+          "
+        >
 
-              {filteredProducts.map(
-                (product) => (
+          {
 
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    onClick={() =>
-                      addItem(product)
-                    }
-                  />
+            filteredProducts.map(
+              (product) => (
 
-                )
-              )}
+                <ProductCard
 
-            </div>
+                  key={
+                    product.id
+                  }
+
+                  product={
+                    product
+                  }
+
+                  onClick={() =>
+                    addItem(
+                      product
+                    )
+                  }
+
+                />
+
+              )
+            )
+
+          }
+
+        </div>
 
           </div>
 
@@ -670,9 +844,13 @@ export default function PosPage() {
 
           <CartPanel
 
-            cartItems={cartItems}
+            cartItems={
+              cartItems
+            }
 
-            subtotal={subtotal}
+            subtotal={
+              subtotal
+            }
 
             increaseQty={
               increaseQty
@@ -716,9 +894,13 @@ export default function PosPage() {
 
       />
 
-      {/* print receipt */}
+      {/* PRINT AREA */}
 
-      <div className="print-area hidden print:block">
+      <div
+        className="
+          print-area
+        "
+      >
 
         <div ref={receiptRef}>
 
