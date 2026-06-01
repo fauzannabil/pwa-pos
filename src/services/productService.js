@@ -184,14 +184,14 @@ getLocalProducts() {
 */
 
 export async function
-reduceLocalStock(items) {
+reduceLocalStock(items, invoiceNo = null) {
 
   for (const item of items) {
 
     const product =
 
       await db.products.get(
-        item.product_id
+        Number(item.product_id)
       );
 
     if (!product) {
@@ -202,15 +202,11 @@ reduceLocalStock(items) {
 
     const currentStock =
 
-      Number(
-        product.stock || 0
-      );
+      Number(product.stock || 0);
 
     const qty =
 
-      Number(
-        item.qty || 0
-      );
+      Number(item.qty || 0);
 
     const newStock =
 
@@ -221,13 +217,41 @@ reduceLocalStock(items) {
 
     await db.products.update(
 
-      item.product_id,
+      Number(item.product_id),
 
       {
-        stock: newStock,
+        stock: newStock
       }
 
     );
+
+    await db.stock_movements.add({
+
+      product_id:
+        Number(item.product_id),
+
+      product_name:
+        product.title,
+
+      type:
+        'SALE',
+
+      qty:
+        qty,
+
+      stock_before:
+        currentStock,
+
+      stock_after:
+        newStock,
+
+      reference_no:
+        invoiceNo,
+
+      created_at:
+        new Date()
+
+    });
 
   }
 

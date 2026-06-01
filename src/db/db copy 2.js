@@ -4,7 +4,7 @@ const db = new Dexie(
   'pos_database'
 );
 
-db.version(3).stores({
+db.version(4).stores({
 
   products: `
     id,
@@ -20,17 +20,20 @@ db.version(3).stores({
     invoice_no,
     cashier_id,
     sync_status,
+    status,
     retry_count,
+    paid_amount,
+    change_amount,
     created_at,
     updated_at,
     transaction_time
   `,
 
   audit_logs: `
-  ++id,
-  event,
-  transaction_uuid,
-  created_at 
+    ++id,
+    transaction_uuid,
+    event,
+    created_at
   `,
 
 });

@@ -32,10 +32,11 @@ from '../components/auth/LogoutButton';
 import Receipt
 from '../components/receipt/Receipt';
 
+import { v4 as uuidv4 } from 'uuid';
+
 import {
   syncProducts,
-  getLocalProducts,
-  reduceLocalStock
+  getLocalProducts
 } from '../services/productService';
 
 import {
@@ -57,6 +58,11 @@ PosPage() {
   const [
     keyword,
     setKeyword
+  ] = useState('');
+
+  const [
+    searchKeyword,
+    setSearchKeyword
   ] = useState('');
 
   const [
@@ -446,6 +452,12 @@ loadProducts() {
     try {
 
       const transaction = {
+        
+        transaction_uuid:  uuidv4(),
+        
+        cashier_id: user?.id,
+        cashier_name: user?.name,
+
 
         invoice_no:
 
@@ -501,6 +513,8 @@ loadProducts() {
               price:
                 item.sell_price,
 
+              product_name: item.title //utk kemudanan di history transaksi
+
             })
           ),
 
@@ -512,11 +526,6 @@ loadProducts() {
         transaction
       );
 
-      // reduce local stock
-
-      await reduceLocalStock(
-        transaction.items
-      );
 
       // save receipt data
 
@@ -526,11 +535,17 @@ loadProducts() {
 
       // sync if online
 
-      if (navigator.onLine) {
-
-        await syncPendingTransactions();
-
-      }
+    // [TANDA PERUBAHAN]: Logika Sync yang lebih aman
+        if (navigator.onLine) {
+            try {
+                // Kita await sync tapi jangan biarkan error sync menggagalkan status checkout di UI
+                await syncPendingTransactions();
+            } catch (syncError) {
+                console.warn("Sync failed but transaction saved locally:", syncError);
+                // Jangan alert error di sini agar user tidak bingung, 
+                // karena data sudah aman di IndexedDB dan akan di-retry oleh syncService
+            }
+        }
 
       // reload products
 
@@ -552,17 +567,25 @@ loadProducts() {
 
       }, 300);
 
-      alert(
-        'Transaction success'
-      );
+      // [TANDA PERUBAHAN]: Beri feedback lebih jelas jika sedang offline
+        if (!navigator.onLine) {
+            alert('Transaction saved locally (Offline). It will sync automatically when online.');
+        } else {
+            alert('Transaction success');
+        }
 
     } catch (error) {
 
-      console.log(error);
 
-      alert(
-        'Transaction failed'
-      );
+        console.log(error);
+
+        alert(
+
+          error.message ||
+
+          'Transaction failed'
+
+        );
 
     } finally {
 
@@ -623,6 +646,27 @@ loadProducts() {
 
   ]);
 
+  useEffect(() => {
+
+    const timer =
+
+      setTimeout(() => {
+
+        setSearchKeyword(
+          keyword
+        );
+
+      }, 300);
+
+    return () => {
+
+      clearTimeout(timer);
+
+    };
+
+  }, [keyword]);
+
+
   /*
   |--------------------------------
   | Filter Products
@@ -636,7 +680,7 @@ loadProducts() {
 
         const search =
 
-          keyword.toLowerCase();
+          searchKeyword.toLowerCase();
 
         return (
 

@@ -14,38 +14,6 @@ let syncInterval = null;
 
 let syncRunning = false;
 
-async function
-isBackendReachable() {
-
-  try {
-
-    const API_URL =
-
-      import.meta.env
-        .VITE_API_URL;
-
-    const response =
-
-      await fetch(
-
-        `${API_URL}/ping`,
-
-        {
-          method: 'GET',
-        }
-
-      );
-
-    return response.ok;
-
-  } catch (error) {
-
-    return false;
-
-  }
-
-}
-
 export async function
 runAutoSync() {
 
@@ -61,31 +29,9 @@ runAutoSync() {
 
   if (!navigator.onLine) {
 
-      console.log(
-        'Browser offline'
-      );
+    return;
 
-      return;
-
-    }
-
-    /*
-    |--------------------------------
-    | Check Backend
-    |--------------------------------
-    */
-
-    const backendOnline = await isBackendReachable();
-
-    if (!backendOnline) {
-
-        console.log(
-          'Backend unreachable'
-        );
-
-        return;
-
-    }
+  }
 
   syncRunning = true;
 

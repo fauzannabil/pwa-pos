@@ -1,6 +1,8 @@
 import db from '../db/db';
-
 import api from '../api/api';
+import { reduceLocalStock } from './productService';
+import { addAuditLog } from './auditService';
+
 
 let syncInProgress = false;
 
@@ -10,28 +12,77 @@ let syncInProgress = false;
 |--------------------------------
 */
 
+
+/*
+|--------------------------------
+| Atomic Local Checkout
+|--------------------------------
+*/
+
 export async function
-saveLocalTransaction(
-  transaction
-) {
+  saveTransactionAtomic(
+    transaction
+  ) {
 
-  await db.transactions.add({
+  await db.transaction(
 
-    ...transaction,
+    'rw',
 
-    sync_status:
-      'pending',
+    db.transactions,
+    db.products,
+    db.audit_logs,
 
-    retry_count: 0,
+    async () => {
 
-    last_error: null,
+      /*
+      |----------------------------
+      | Save Transaction
+      |----------------------------
+      */
 
-    last_sync_at: null,
+      await db.transactions.add({
 
-    created_at:
-      new Date(),
+        ...transaction,
 
-  });
+        sync_status:
+          'pending',
+
+        retry_count: 0,
+
+        last_error: null,
+
+        last_sync_at: null,
+
+        created_at: new Date(),
+
+        //tambah field void (pembatalan)
+        void_status: false,
+        void_at: null,
+        void_reason: null,
+        void_by: null,
+
+      });
+
+      await addAuditLog(
+        transaction.transaction_uuid,
+        'TRANSACTION_CREATED'
+      );
+
+
+      /*
+      |----------------------------
+      | Reduce Stock
+      |----------------------------
+      */
+
+      await reduceLocalStock(
+        transaction.items,
+        transaction.invoice_no
+      );
+
+    }
+
+  );
 
 }
 
@@ -88,7 +139,7 @@ countPendingTransactions() {
 */
 
 export async function
-syncPendingTransactions() {
+  syncPendingTransactions() {
 
   // prevent double sync
 
@@ -144,11 +195,11 @@ syncPendingTransactions() {
 
           {
 
-            sync_status:
-              'syncing',
+            sync_status: 'syncing',
 
-            last_sync_at:
-              new Date(),
+            last_sync_at: new Date(),
+
+            updated_at: new Date(),
 
           }
 
@@ -216,47 +267,201 @@ syncPendingTransactions() {
             last_error:
               null,
 
+            updated_at: new Date(),
+
           }
+
+        );
+
+        await addAuditLog(
+
+          trx.transaction_uuid,
+
+          'TRANSACTION_SYNCED'
 
         );
 
         syncedCount++;
 
-      } catch (error) {
+      }
+  catch (error) {
 
-        console.log(error);
+    console.log(error);
 
-        // retry state
+    /*
+    |--------------------------------
+    | Detect Conflict Error
+    |--------------------------------
+    */
+
+    const errorMessage =
+
+      error?.response?.data?.error ||
+
+      error?.message ||
+
+      'Sync failed';
+
+    const isConflict =
+
+      errorMessage
+        .toLowerCase()
+        .includes('stock')
+
+      ||
+
+      errorMessage
+        .toLowerCase()
+        .includes('product not found');
+
+    /*
+    |--------------------------------
+    | Conflict
+    |--------------------------------
+    */
+
+    if (isConflict) {
+
+      await db.transactions.update(
+
+        trx.id,
+
+        {
+
+          sync_status:
+            'conflict',
+
+          last_error:
+            errorMessage,
+
+          last_sync_at:
+            new Date(),
+
+        }
+
+      );
+
+      continue;
+
+    }
+
+      /*
+      |--------------------------------
+      | Detect Error Type
+      |--------------------------------
+      */
+
+      const statusCode =
+
+        error?.response?.status;
+
+      /*
+      |--------------------------------
+      | Non Retryable Error
+      |--------------------------------
+      */
+
+    if ( statusCode === 422 ||
+        statusCode === 400 ) 
+     {
 
         await db.transactions.update(
 
           trx.id,
 
-          {
+            {
 
-            sync_status:
-              'retry',
+              sync_status:
+                'failed',
 
-            retry_count:
+              last_error:
 
-              Number(
-                trx.retry_count || 0
-              ) + 1,
+                error?.response?.data?.message ||
 
-            last_error:
+                error.message ||
 
-              error.message ||
+                'Validation failed',
 
-              'Sync failed',
+              last_sync_at:
+                new Date(),
 
-            last_sync_at:
-              new Date(),
-
-          }
+            }
 
         );
 
+            console.log(
+              'Hard failed:',
+              trx.invoice_no
+            );
+
       }
+
+      /*
+      |--------------------------------
+      | Retryable Error
+      |--------------------------------
+      */
+
+        else {
+
+            await db.transactions.update(
+
+              trx.id,
+
+              {
+
+                sync_status:
+                  'retry',
+
+                retry_count:
+
+                  Number(
+                    trx.retry_count || 0
+                  ) + 1,
+
+                last_error:
+
+                  error.message ||
+
+                  'Sync failed',
+
+                last_sync_at:
+                  new Date(),
+
+              }
+
+            );
+
+            await addAuditLog(
+
+              trx.transaction_uuid,
+
+              'TRANSACTION_RETRY',
+
+              error.message
+
+            );
+
+            if (
+              Number(trx.retry_count || 0) + 1 >= MAX_RETRY
+            ) {
+
+              await addAuditLog(
+
+                trx.transaction_uuid,
+
+                'TRANSACTION_FAILED',
+
+                'Max retry reached'
+
+              );
+
+            }
+
+        }
+
+
+     }
 
     }
 
@@ -281,7 +486,7 @@ getLocalTransactions() {
 
   return await db.transactions
 
-    .orderBy('created_at')
+    .orderBy('transaction_time') //.orderBy('created_at')
 
     .reverse()
 
@@ -399,7 +604,7 @@ getTopProducts() {
 
       const name =
 
-        item.product_title ||
+        item.product_name ||
 
         item.product?.title ||
 
@@ -520,5 +725,235 @@ getWeeklySales() {
   }
 
   return result;
+
+}
+
+/*
+|--------------------------------
+| Force Retry Transaction
+|--------------------------------
+*/
+
+export async function
+forceRetryTransaction(id) {
+
+  await db.transactions.update(
+
+    id,
+
+    {
+
+      sync_status: 'pending',
+
+      retry_count: 0,
+
+      last_error: null,
+
+      updated_at: new Date(),
+
+    }
+
+  );
+
+}
+
+/*
+|--------------------------------
+| Delete Transaction
+|--------------------------------
+*/
+
+export async function
+deleteTransaction(id) {
+
+  return await db.transactions
+    .delete(id);
+
+}
+
+/*
+|--------------------------------
+| Hourly Sales Today
+|--------------------------------
+*/
+
+export async function
+getHourlySales() {
+
+  const transactions =
+
+    await getTodayTransactions();
+
+  const result = [];
+
+  for (let hour = 0; hour < 24; hour++) {
+
+    const total =
+
+      transactions
+
+        .filter((trx) => {
+
+          const trxHour =
+
+            new Date(
+              trx.transaction_time
+            ).getHours();
+
+          return trxHour === hour;
+
+        })
+
+        .reduce(
+
+          (sum, trx) =>
+
+            sum +
+
+            Number(
+              trx.total || 0
+            ),
+
+          0
+
+        );
+
+    result.push({
+
+      hour:
+        String(hour)
+          .padStart(2, '0'),
+
+      total,
+
+    });
+
+  }
+
+  return result;
+
+}
+
+
+/*
+|--------------------------------
+|Void Transaction / Pembatalan Transaksi
+|--------------------------------
+*/
+
+export async function voidTransaction(
+  transactionId,
+  reason
+) {
+
+  const trx =
+
+    await db.transactions.get(
+      Number(transactionId)
+    );
+
+  if (!trx) {
+
+    throw new Error(
+      'Transaction not found'
+    );
+
+  }
+
+  if (trx.void_status) {
+
+    throw new Error(
+      'Transaction already voided'
+    );
+
+  }
+
+  await db.transaction(
+
+    'rw',
+
+    db.transactions,
+    db.products,
+
+    async () => {
+
+      for (
+        const item of trx.items
+      ) {
+
+        const product =
+
+          await db.products.get(
+            Number(item.product_id)
+          );
+
+        if (product) {
+
+          await db.products.update(
+
+              Number(item.product_id),
+
+            {
+
+              stock:
+
+                Number(product.stock) +
+
+                Number(item.qty)
+
+            }
+
+          );
+
+        }
+
+      }
+
+      await db.transactions.update(
+
+        trx.id,
+
+        {
+
+          void_status: true,
+
+          void_at:
+            new Date(),
+
+          void_reason:
+            reason,
+
+          void_by:
+
+            trx.cashier_name ||
+
+            'Administrator',
+
+          sync_status:
+            'void'
+
+        }
+
+      );
+
+    }
+
+  );
+
+    await addAuditLog(
+
+      trx.transaction_uuid,
+
+      'TRANSACTION_VOIDED',
+
+      JSON.stringify({
+
+        reason
+
+      })
+
+    );
+
+  return true;
 
 }

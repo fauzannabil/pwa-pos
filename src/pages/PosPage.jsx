@@ -36,12 +36,12 @@ import { v4 as uuidv4 } from 'uuid';
 
 import {
   syncProducts,
-  getLocalProducts,
-  reduceLocalStock
+  getLocalProducts
 } from '../services/productService';
 
 import {
-  saveLocalTransaction,
+  //saveLocalTransaction,
+  saveTransactionAtomic,
   syncPendingTransactions,
   countPendingTransactions
 } from '../services/transactionService';
@@ -141,6 +141,9 @@ PosPage() {
 
   const receiptRef =
     useRef();
+
+  const checkoutLockRef =
+    useRef(false);
 
   /*
   |--------------------------------
@@ -416,11 +419,20 @@ loadProducts() {
 
     // prevent double click
 
-    if (loadingCheckout) {
+    if (
+
+      loadingCheckout ||
+
+      checkoutLockRef.current
+
+    ) {
 
       return;
 
     }
+
+    checkoutLockRef.current =
+      true;
 
     // cash validation
 
@@ -523,15 +535,11 @@ loadProducts() {
 
       // save local transaction
 
-      await saveLocalTransaction(
+     // await saveLocalTransaction(
+      await saveTransactionAtomic(
         transaction
       );
 
-      // reduce local stock
-
-      await reduceLocalStock(
-        transaction.items
-      );
 
       // save receipt data
 
@@ -582,17 +590,26 @@ loadProducts() {
 
     } catch (error) {
 
-      console.log(error);
 
-      alert(
-        'Transaction failed'
-      );
+        console.log(error);
 
-    } finally {
+        alert(
 
-      setLoadingCheckout(
-        false
-      );
+          error.message ||
+
+          'Transaction failed'
+
+        );
+
+    } 
+    finally {
+
+          setLoadingCheckout(
+            false
+          );
+
+          checkoutLockRef.current =
+            false;
 
     }
 
@@ -810,6 +827,22 @@ loadProducts() {
                   History
 
                 </Link>
+
+                  <Link
+                    to="/audit-logs"
+                    className="
+                      bg-purple-600
+                      text-white
+                      px-3
+                      py-2
+                      rounded-lg
+                      text-sm
+                    "
+                    >
+
+                    Audit
+
+                  </Link>
 
                 <Link
                   to="/sync-dashboard"

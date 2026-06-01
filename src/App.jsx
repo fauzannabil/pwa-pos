@@ -16,6 +16,9 @@ import { me } from './services/authService';
 import TransactionHistoryPage from './pages/TransactionHistoryPage';
 import SyncDashboardPage from './pages/SyncDashboardPage';
 import DashboardPage   from './pages/DashboardPage';
+import AuditLogPage from './pages/AuditLogPage';
+import TransactionDetailPage from './pages/TransactionDetailPage';
+import ReconciliationPage from './pages/ReconciliationPage';
 
 export default function App() {
 
@@ -93,26 +96,48 @@ const authLogin =
         />
 
         {/* Redirect unknown route */}
-        <Route
-          path="*"
-          element={<Navigate to="/" />}
-        />
+          <Route
+            path="*"
+            element={<Navigate to="/" />}
+          />
 
 
-        <Route
-          path="/sync-dashboard"
-          element={
-            <SyncDashboardPage />
-          }
-        />
+          <Route
+            path="/sync-dashboard"
+            element={
+              <SyncDashboardPage />
+            }
+          />
 
-        <Route
-          path="/dashboard"
-          element={
-            <DashboardPage />
-          }
-        />
+          <Route
+            path="/dashboard"
+            element={
+              <DashboardPage />
+            }
+          />
 
+          <Route
+            path="/audit-logs"
+            element={<AuditLogPage />}
+          />
+             <Route
+
+                path="/transaction/:id"
+
+                element={
+
+                  <TransactionDetailPage />
+
+                }
+
+              />
+
+              <Route
+                path="/reconciliation"
+                element={
+                  <ReconciliationPage />
+                }
+              />
       </Routes>
 
     </BrowserRouter>

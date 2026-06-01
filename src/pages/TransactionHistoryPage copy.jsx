@@ -197,14 +197,15 @@ TransactionHistoryPage() {
                 >
 
 {
-                  trx.transaction_time
-                    ? new Date(
-                        trx.transaction_time
-                      ).toLocaleString()
 
-                 : trx.created_at
+                  trx.created_at
                     ? new Date(
                         trx.created_at
+                      ).toLocaleString()
+
+                    : trx.transaction_time
+                    ? new Date(
+                        trx.transaction_time
                       ).toLocaleString()
 
                     : '-'

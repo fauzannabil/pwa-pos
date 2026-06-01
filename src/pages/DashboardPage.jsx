@@ -6,9 +6,7 @@ import {
 } from 'react';
 
 import {
-
   Link,
-
 } from 'react-router-dom';
 
 import db from '../db/db';
@@ -25,6 +23,8 @@ import {
 import SalesChart
   from '../components/dashboard/SalesChart';
 
+  import HourlySalesChart
+from '../components/dashboard/HourlySalesChart';
 
 export default function
 DashboardPage() {
@@ -63,6 +63,11 @@ DashboardPage() {
     setTopProducts,
 
   ] = useState([]);
+
+  const [
+    failedCount,
+    setFailedCount,
+  ] = useState(0);
 
   async function
   loadDashboard() {
@@ -139,6 +144,28 @@ DashboardPage() {
       setTopProducts(
         top
       );
+      /*
+      |------------------------------
+      | Failed Sync
+      |------------------------------
+      */
+
+      const failed =
+
+        await db.transactions
+
+          .where('sync_status')
+
+          .equals('failed')
+
+          .count();
+
+      setFailedCount(
+        failed
+      );
+
+
+
 
     } catch (error) {
 
@@ -201,6 +228,8 @@ DashboardPage() {
 
         </div>
 
+
+
         <Link
 
           to="/pos"
@@ -220,12 +249,80 @@ DashboardPage() {
 
       </div>
 
+      <div
+        className="
+          flex
+          gap-3
+          mb-8
+          flex-wrap
+        "
+      >
+
+        <Link
+          to="/transactions"
+          className="
+            bg-green-600
+            text-white
+            px-4
+            py-2
+            rounded-lg
+          "
+        >
+
+          Transactions
+
+        </Link>
+
+        <Link
+          to="/sync-dashboard"
+          className="
+            bg-orange-600
+            text-white
+            px-4
+            py-2
+            rounded-lg
+          "
+        >
+
+          Sync Dashboard
+
+        </Link>
+
+        <Link
+          to="/audit-logs"
+          className="
+            bg-slate-700
+            text-white
+            px-4
+            py-2
+            rounded-lg
+          "
+        >
+
+          Audit Logs
+
+        </Link>
+
+                <Link
+          to="/reconciliation"
+          className="
+            bg-purple-600
+            text-white
+            px-4
+            py-2
+            rounded-lg
+          "
+        >
+          Stock Reconciliation
+        </Link>
+
+      </div>
       {/* STATS */}
 
       <div
         className="
           grid
-          grid-cols-4
+          grid-cols-6
           gap-4
           mb-8
         "
@@ -383,12 +480,99 @@ DashboardPage() {
 
         </div>
 
+        <div
+          className="
+            bg-white
+            rounded-2xl
+            shadow
+            p-5
+          "
+        >
+
+          <div
+            className="
+              text-gray-500
+              text-sm
+            "
+          >
+
+            Failed Sync
+
+          </div>
+
+          <div
+            className="
+              text-4xl
+              font-bold
+              mt-2
+              text-red-600
+            "
+          >
+
+            {failedCount}
+
+          </div>
+
+        </div>
+
+        <div
+          className="
+            bg-white
+            rounded-2xl
+            shadow
+            p-5
+          "
+        >
+
+          <div
+            className="
+              text-gray-500
+              text-sm
+            "
+          >
+
+            Avg Transaction
+
+          </div>
+
+          <div
+            className="
+              text-3xl
+              font-bold
+              mt-2
+              text-indigo-600
+            "
+          >
+
+            Rp {
+
+              totalTransactions > 0
+
+                ? Math.round(
+
+                    totalRevenue /
+
+                    totalTransactions
+
+                  ).toLocaleString()
+
+                : 0
+
+            }
+
+          </div>
+
+        </div>
+
       </div>
 
   <div className="mb-8">
     <SalesChart />
   </div>
 
+  <div className="mb-8">
+    <HourlySalesChart />
+  </div>
 
       {/* TOP PRODUCTS */}
 
