@@ -1,9 +1,28 @@
 import db from '../db/db';
 import api from '../api/api';
 import {  addAuditLog } from './auditService';
+import {
+  getLocalProducts
+} from './productService';
+import {
+  validateSyncContext
+} from '../utils/saasContext';
 
 export async function
-getStockDifferences() {
+getStockDifferences(context = null) {
+
+  const syncValidation =
+    validateSyncContext(
+      context
+    );
+
+  if (!syncValidation.ok) {
+
+    throw new Error(
+      syncValidation.reason
+    );
+
+  }
 
   const result = [];
 
@@ -21,7 +40,9 @@ getStockDifferences() {
 
     const localProducts =
 
-      await db.products.toArray();
+      await getLocalProducts(
+        context
+      );
 
     for (
       const localProduct
@@ -114,9 +135,7 @@ getStockDifferences() {
 
     return result;
 
-  } catch (error) {
-
-    console.log(error);
+  } catch {
 
     return [];
 
@@ -135,9 +154,24 @@ repairLocalStock(
 
   productId,
 
-  serverProducts = null
+  serverProducts = null,
+
+  context = null
 
 ) {
+
+  const syncValidation =
+    validateSyncContext(
+      context
+    );
+
+  if (!syncValidation.ok) {
+
+    throw new Error(
+      syncValidation.reason
+    );
+
+  }
 
   try {
 
@@ -182,6 +216,18 @@ repairLocalStock(
         Number(productId)
       );
 
+    if (
+      !localProduct ||
+      String(localProduct.tenant_id) !== String(context.tenant_id) ||
+      String(localProduct.store_id) !== String(context.store_id)
+    ) {
+
+      throw new Error(
+        'Produk tidak sesuai dengan tenant/store aktif.'
+      );
+
+    }
+
     await db.products.update(
 
       Number(productId),
@@ -212,7 +258,9 @@ repairLocalStock(
         new_stock:
           serverProduct.stock
 
-      })
+      }),
+
+      context
 
     );
 
@@ -228,9 +276,7 @@ repairLocalStock(
 
     };
 
-  } catch (error) {
-
-    console.log(error);
+  } catch {
 
     return false;
 
@@ -240,7 +286,20 @@ repairLocalStock(
 
 
 export async function
-repairAllStocks() {
+repairAllStocks(context = null) {
+
+  const syncValidation =
+    validateSyncContext(
+      context
+    );
+
+  if (!syncValidation.ok) {
+
+    throw new Error(
+      syncValidation.reason
+    );
+
+  }
 
   try {
 
@@ -256,7 +315,9 @@ repairAllStocks() {
 
     const differences =
 
-      await getStockDifferences();
+      await getStockDifferences(
+        context
+      );
 
     let repaired = 0;
 
@@ -274,7 +335,9 @@ repairAllStocks() {
 
           item.id,
 
-          serverProducts
+          serverProducts,
+
+          context
 
         );
 
@@ -292,9 +355,7 @@ repairAllStocks() {
 
     return repaired;
 
-  } catch (error) {
-
-    console.log(error);
+  } catch {
 
     return 0;
 

@@ -1,286 +1,252 @@
-import { create }
-from 'zustand';
+import { create } from 'zustand';
 
-const savedCart =
+const LEGACY_CART_KEY = 'pos-cart';
+const EMPTY_CART_KEY = 'pos-cart:unscoped';
 
-  JSON.parse(
+function safeParseCart(key) {
+  try {
+    const value =
+      localStorage.getItem(key);
 
-    localStorage.getItem(
-      'pos-cart'
-    ) || '[]'
+    if (!value) {
+      return [];
+    }
 
+    const parsed =
+      JSON.parse(value);
+
+    return Array.isArray(parsed)
+      ? parsed
+      : [];
+  } catch {
+    localStorage.removeItem(key);
+    return [];
+  }
+}
+
+function cartScopeKey(scope = {}) {
+  const {
+    tenant_id,
+    store_id,
+    terminal_id,
+    user_id,
+    shift_id,
+  } = scope;
+
+  if (
+    !tenant_id ||
+    !store_id ||
+    !terminal_id ||
+    !user_id ||
+    !shift_id
+  ) {
+    return EMPTY_CART_KEY;
+  }
+
+  return [
+    'pos-cart',
+    tenant_id,
+    store_id,
+    terminal_id,
+    user_id,
+    shift_id,
+  ].map(String).join(':');
+}
+
+function persistCart(key, items) {
+  localStorage.setItem(
+    key,
+    JSON.stringify(items)
   );
+}
+
+function removeLegacyCart() {
+  localStorage.removeItem(
+    LEGACY_CART_KEY
+  );
+}
 
 const useCartStore =
-
   create((set, get) => ({
 
-    items: savedCart,
+    scopeKey:
+      EMPTY_CART_KEY,
 
-    /*
-    |--------------------------------
-    | Save Cart Helper
-    |--------------------------------
-    */
+    items: [],
 
-    saveCart: (items) => {
+    setScope: (scope) => {
+      const nextScopeKey =
+        cartScopeKey(scope);
 
-      localStorage.setItem(
+      const currentScopeKey =
+        get().scopeKey;
 
-        'pos-cart',
+      if (nextScopeKey === currentScopeKey) {
+        return;
+      }
 
-        JSON.stringify(items)
+      removeLegacyCart();
 
-      );
-
+      set({
+        scopeKey:
+          nextScopeKey,
+        items:
+          safeParseCart(nextScopeKey),
+      });
     },
 
-    /*
-    |--------------------------------
-    | Add Item
-    |--------------------------------
-    */
+    saveCart: (items) => {
+      persistCart(
+        get().scopeKey,
+        items
+      );
+    },
 
     addItem: (product) =>
-
       set((state) => {
-
         const existing =
-
           state.items.find(
-
             (item) =>
-
-              item.id ===
-              product.id
-
+              item.id === product.id
           );
 
-        let newItems = [];
-
-        // existing item
+        let newItems;
 
         if (existing) {
-
-          if (
-
-            existing.qty >=
-            product.stock
-
-          ) {
-
+          if (existing.qty >= product.stock) {
             return state;
-
           }
 
           newItems =
-
             state.items.map(
-
               (item) =>
-
-                item.id ===
-                product.id
-
+                item.id === product.id
                   ? {
-
                       ...item,
-
                       qty:
                         item.qty + 1,
-
                     }
-
                   : item
-
             );
-
         } else {
-
-          // stock empty
-
-          if (
-
-            product.stock <= 0
-
-          ) {
-
+          if (product.stock <= 0) {
             return state;
-
           }
 
           newItems = [
-
             ...state.items,
-
             {
-
               ...product,
-
               qty: 1,
-
             },
-
           ];
-
         }
 
-        localStorage.setItem(
-
-          'pos-cart',
-
-          JSON.stringify(
-            newItems
-          )
-
+        persistCart(
+          state.scopeKey,
+          newItems
         );
 
         return {
-
-          items: newItems,
-
+          items:
+            newItems,
         };
-
       }),
-
-    /*
-    |--------------------------------
-    | Increase Qty
-    |--------------------------------
-    */
 
     increaseQty: (id) =>
-
       set((state) => {
-
         const newItems =
-
-          state.items.map(
-
-            (item) => {
-
-              if (
-                item.id !== id
-              ) {
-
-                return item;
-
-              }
-
-              if (
-                item.qty >=
-                item.stock
-              ) {
-
-                return item;
-
-              }
-
-              return {
-
-                ...item,
-
-                qty:
-                  item.qty + 1,
-
-              };
-
+          state.items.map((item) => {
+            if (item.id !== id) {
+              return item;
             }
 
-          );
+            if (item.qty >= item.stock) {
+              return item;
+            }
 
-        localStorage.setItem(
+            return {
+              ...item,
+              qty:
+                item.qty + 1,
+            };
+          });
 
-          'pos-cart',
-
-          JSON.stringify(
-            newItems
-          )
-
+        persistCart(
+          state.scopeKey,
+          newItems
         );
 
         return {
-
-          items: newItems,
-
+          items:
+            newItems,
         };
-
       }),
-
-    /*
-    |--------------------------------
-    | Decrease Qty
-    |--------------------------------
-    */
 
     decreaseQty: (id) =>
-
       set((state) => {
-
         const newItems =
-
           state.items
-
             .map((item) =>
-
               item.id === id
-
                 ? {
-
                     ...item,
-
                     qty:
                       item.qty - 1,
-
                   }
-
                 : item
-
             )
-
             .filter(
-
               (item) =>
                 item.qty > 0
-
             );
 
-        localStorage.setItem(
-
-          'pos-cart',
-
-          JSON.stringify(
-            newItems
-          )
-
+        persistCart(
+          state.scopeKey,
+          newItems
         );
 
         return {
-
-          items: newItems,
-
+          items:
+            newItems,
         };
-
       }),
 
-    /*
-    |--------------------------------
-    | Clear Cart
-    |--------------------------------
-    */
+    removeItem: (id) =>
+      set((state) => {
+        const newItems =
+          state.items.filter(
+            (item) =>
+              item.id !== id
+          );
+
+        persistCart(
+          state.scopeKey,
+          newItems
+        );
+
+        return {
+          items:
+            newItems,
+        };
+      }),
 
     clearCart: () => {
-
       localStorage.removeItem(
-        'pos-cart'
+        get().scopeKey
       );
 
       set({
-
         items: [],
-
       });
+    },
 
+    resetCartScope: () => {
+      set({
+        scopeKey:
+          EMPTY_CART_KEY,
+        items: [],
+      });
     },
 
   }));

@@ -1,12 +1,38 @@
-import { useEffect, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useState
+} from 'react';
 
-import { useParams } from 'react-router-dom';
+import {
+  Link,
+  useParams
+} from 'react-router-dom';
 
 import db from '../db/db';
 
 import { getAuditLogs } from '../services/auditService';
 
 import { voidTransaction } from '../services/transactionService';
+import {
+  getTransactionScope,
+  matchesTransactionScope
+} from '../services/transactionService';
+
+import PrintTemplatePreview
+from '../components/receipt/PrintTemplatePreview';
+
+import useAuthStore
+  from '../stores/authStore';
+import {
+  canUseManagerTools,
+  canViewTransaction
+} from '../utils/authz';
+import {
+  showToast
+} from '../utils/uiFeedback';
+import ConfirmDialog
+  from '../components/ui/ConfirmDialog';
 
 export default function
 TransactionDetailPage() {
@@ -14,6 +40,42 @@ TransactionDetailPage() {
 
   const { id } =
     useParams();
+
+  const tenant =
+    useAuthStore(
+      (state) =>
+        state.tenant
+    );
+
+  const store =
+    useAuthStore(
+      (state) =>
+        state.store
+    );
+
+  const terminal =
+    useAuthStore(
+      (state) =>
+        state.terminal
+    );
+
+  const user =
+    useAuthStore(
+      (state) =>
+        state.user
+    );
+
+  const context =
+    useMemo(() =>
+      getTransactionScope({
+      tenant,
+      store,
+      terminal,
+    }), [
+      tenant,
+      store,
+      terminal
+    ]);
 
   const [transaction,
     setTransaction] =
@@ -23,383 +85,61 @@ TransactionDetailPage() {
     setAuditLogs] =
       useState([]);
 
+  const [notFound,
+    setNotFound] =
+      useState(false);
+
+  const [
+    showPrintPreview,
+    setShowPrintPreview
+  ] = useState(false);
+
+  const [
+    showVoidDialog,
+    setShowVoidDialog
+  ] = useState(false);
+
+  const [
+    voidReason,
+    setVoidReason
+  ] = useState('');
+
   /*
   |--------------------------------
-  | PRINT RECEIPT
+  | PRINT PREVIEW
   |--------------------------------
   */
 
-  function printReceipt() {
-    const logoUrl = `${window.location.origin}/logo-untanpos.png`;
-
-      if (!transaction) return;
-
-      const itemsHtml =
-
-        (transaction.items || [])
-
-          .map(
-
-            item => `
-
-              <div style="margin-bottom:6px">
-
-                <div class="item-name">
-
-                  ${
-                    item.product_name ||
-                    item.product_title ||
-                    item.title ||
-                    '-'
-                  }
-
-                </div>
-
-                <div class="row">
-
-                  <span>
-
-                    ${item.qty} x Rp ${Number(
-                      item.price || 0
-                    ).toLocaleString()}
-
-                  </span>
-
-                  <span>
-
-                    Rp ${Number(
-                      (item.qty || 0) *
-                      (item.price || 0)
-                    ).toLocaleString()}
-
-                  </span>
-
-                </div>
-
-              </div>
-
-            `
-
-          )
-
-          .join('');
-
-      const trxDate =
-            new Date(
-              transaction.transaction_time
-            ).toLocaleString(
-              'id-ID'
-      );
-
-
-      const html = `
-
-        <html>
-
-          <head>
-
-            <title>
-
-              Receipt ${transaction.invoice_no}
-
-            </title>
-
-          <style>
-
-            body {
-
-              width: 58mm;
-              font-family: "Courier New", monospace;
-              font-size: 12px;
-              margin: 0;
-              padding: 5px;
-
-            }
-
-            .center {
-
-              text-align: center;
-
-            }
-
-            .line {
-
-              border-top: 1px dashed #000;
-              margin: 5px 0;
-
-            }
-
-            .row {
-
-              display: flex;
-              justify-content: space-between;
-
-            }
-
-            .item-name {
-
-              font-weight: bold;
-
-            }
-
-            .total {
-
-              font-size: 13px;
-              font-weight: bold;
-
-            }
-
-            .invoice {
-              font-size: 10px;
-              letter-spacing: -0.5px;
-              font-weight: bold;
-            }
-
-          </style>
-
-          </head>
-
-          <body>
-
-            <div class="center">
-            <img
-              src="${logoUrl}"
-              style="
-                width:120px;
-                margin-bottom:6px;
-              "
-            >
-
-
-              <div>
-
-                Universitas Tanjungpura Pontianak
-
-              </div>
-
-              <div>
-
-                Telp: 095179945179
-
-              </div>
-
-            </div>
-
-            <hr>
-
-            <table
-              style="
-                width:100%;
-                font-size:12px;
-                margin-top:4px;
-              "
-            >
-
-              <tr>
-
-                <td style="width:45px">
-
-                  Invoice
-
-                </td>
-
-                <td style="width:10px">
-
-                  :
-
-                </td>
-
-                <td class="invoice">
-
-                  ${transaction.invoice_no}
-
-                </td>
-
-              </tr>
-
-              <tr>
-
-                <td>
-
-                  Date
-
-                </td>
-
-                <td>
-
-                  :
-
-                </td>
-
-                <td>
-
-                  ${new Date(
-                    transaction.transaction_time
-                  ).toLocaleString('id-ID')}
-
-                </td>
-
-              </tr>
-
-              <tr>
-
-                <td>
-
-                  Cashier
-
-                </td>
-
-                <td>
-
-                  :
-
-                </td>
-
-                <td>
-
-                  ${transaction.cashier_name || 'Administrator'}
-
-                </td>
-
-              </tr>
-
-            </table>
-
-            <div class="line"></div>
-
-               ${itemsHtml}
-
-            <div class="line"></div>
-            <div>
-
-              Payment :
-
-              ${transaction.payment_method || 'Cash'}
-
-            </div>
-
-            <div class="row total">
-
-              <span>Total</span>
-
-              <span>
-
-                Rp ${Number(
-                  transaction.total || 0
-                ).toLocaleString()}
-
-              </span>
-
-            </div>
-<div class="row total">
-
-  <span>Paid:</span>
-
-  <span>
-
-    Rp ${Number(
-      transaction.paid_amount || 0
-    ).toLocaleString()}
-
-  </span>
-
-</div>
-
-<div class="row total">
-
-  <span>Change:</span>
-
-  <span>
-
-    Rp ${Number(
-      transaction.change_amount || 0
-    ).toLocaleString()}
-
-  </span>
-
-</div>
-
-
-
-
-
-            <hr>
-
-            <div class="center">
-
-              Thank You
-
-              <br><br>
-
-              Barang yang sudah dibeli
-
-              <br>
-
-              tidak dapat ditukar
-
-              <br>
-
-              atau dikembalikan
-
-            </div>
-              <div align="center"
-                style="
-                  font-size:16px;
-                  font-weight:bold;
-                "
-              >
-
-                UNTANPOS
-
-              </div>
-          </body>
-
-        </html>
-
-      `;
-
-      const printWindow =
-
-        window.open(
-          '',
-          '_blank'
-        );
-
-      printWindow.document.write(
-        html
-      );
-
-      printWindow.document.close();
-
-      printWindow.focus();
-
-      printWindow.print();
+  function openPrintPreview() {
+
+    setShowPrintPreview(
+      true
+    );
 
   }
 
-  async function handleVoid() {
+  function handleVoid() {
+
+    setVoidReason('');
+    setShowVoidDialog(true);
+
+  }
+
+  async function confirmVoidTransaction() {
 
     const reason =
-
-      prompt(
-
-        'Void Reason'
-      );
+      voidReason.trim();
 
     if (!reason) {
 
-      return;
-
-    }
-
-    const confirmVoid =
-
-      confirm(
-
-        'Void this transaction?'
-      );
-
-    if (!confirmVoid) {
+      showToast({
+        title:
+          'Alasan wajib diisi',
+        message:
+          'Masukkan alasan pembatalan transaksi.',
+        tone:
+          'error',
+      });
 
       return;
 
@@ -411,25 +151,40 @@ TransactionDetailPage() {
 
         transaction.id,
 
-        reason
+        reason,
+
+        context,
+
+        canUseManagerTools(user)
+          ? null
+          : user
 
       );
 
-      alert(
+      showToast({
+        title:
+          'Transaction voided',
+        message:
+          'Pembatalan transaksi berhasil disimpan.',
+        tone:
+          'success',
+      });
 
-        'Transaction voided'
-
-      );
+      setShowVoidDialog(false);
+      setVoidReason('');
 
       window.location.reload();
 
     } catch (error) {
 
-      alert(
-
-        error.message
-
-      );
+      showToast({
+        title:
+          'Void gagal',
+        message:
+          error.message,
+        tone:
+          'error',
+      });
 
     }
 
@@ -445,6 +200,39 @@ TransactionDetailPage() {
           Number(id)
         );
 
+      if (
+        trx &&
+        (
+          !matchesTransactionScope(
+            trx,
+            context
+          ) ||
+          !canViewTransaction(
+            trx,
+            user
+          )
+        )
+      ) {
+
+        setNotFound(true);
+        setTransaction(null);
+        setAuditLogs([]);
+
+        return;
+
+      }
+
+      if (!trx) {
+
+        setNotFound(true);
+        setTransaction(null);
+        setAuditLogs([]);
+
+        return;
+
+      }
+
+      setNotFound(false);
       setTransaction(trx);
 
       const logs =
@@ -458,6 +246,11 @@ TransactionDetailPage() {
 
             log.transaction_uuid ===
             trx?.transaction_uuid
+            &&
+            matchesTransactionScope(
+              log,
+              context
+            )
 
         )
 
@@ -467,7 +260,25 @@ TransactionDetailPage() {
 
     loadData();
 
-  }, [id]);
+  }, [
+    id,
+    context,
+    user
+  ]);
+
+  if (notFound) {
+
+    return (
+
+      <div className="p-6">
+
+        Transaction not found.
+
+      </div>
+
+    );
+
+  }
 
   if (!transaction) {
 
@@ -483,31 +294,220 @@ TransactionDetailPage() {
 
   }
 
+  const formatCurrency = (value) =>
+    `Rp ${Number(value || 0).toLocaleString('id-ID')}`;
+
+  const formatDateTime = (value) => {
+    if (!value) {
+      return '-';
+    }
+
+    return new Date(value).toLocaleString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const statusKey =
+    String(transaction.sync_status || 'unknown')
+      .toLowerCase();
+
+  const statusClass =
+    {
+      synced:
+        'bg-emerald-50 text-emerald-700 ring-emerald-200',
+      pending:
+        'bg-amber-50 text-amber-700 ring-amber-200',
+      retry:
+        'bg-orange-50 text-orange-700 ring-orange-200',
+      failed:
+        'bg-rose-50 text-rose-700 ring-rose-200',
+      conflict:
+        'bg-red-50 text-red-700 ring-red-200',
+      void:
+        'bg-slate-100 text-slate-700 ring-slate-200',
+      void_synced:
+        'bg-slate-100 text-slate-700 ring-slate-200',
+    }[statusKey] ||
+    'bg-slate-100 text-slate-700 ring-slate-200';
+
+  const summaryItems = [
+    {
+      label: 'Total Transaksi',
+      value: formatCurrency(transaction.total),
+      tone: 'text-blue-700',
+    },
+    {
+      label: 'Jumlah Bayar',
+      value: formatCurrency(transaction.paid_amount),
+      tone: 'text-slate-900',
+    },
+    {
+      label: 'Kembalian',
+      value: formatCurrency(transaction.change_amount),
+      tone: 'text-emerald-700',
+    },
+  ];
+
+  const detailItems = [
+    {
+      label: 'Invoice',
+      value: transaction.invoice_no,
+      strong: true,
+    },
+    {
+      label: 'UUID Transaksi',
+      value: transaction.transaction_uuid,
+      mono: true,
+    },
+    {
+      label: 'Kasir',
+      value: transaction.cashier_name || 'Administrator',
+    },
+    {
+      label: 'Metode Bayar',
+      value: transaction.payment_method || 'cash',
+    },
+    {
+      label: 'Retry Count',
+      value: transaction.retry_count || 0,
+    },
+    {
+      label: 'Waktu Transaksi',
+      value: formatDateTime(transaction.transaction_time || transaction.created_at),
+    },
+    {
+      label: 'Void Status',
+      value: transaction.void_status ? 'YES' : 'NO',
+    },
+    ...(transaction.void_status
+      ? [
+          {
+            label: 'Void Sync',
+            value: transaction.void_sync_status || '-',
+          },
+          {
+            label: 'Void Reason',
+            value: transaction.void_reason || '-',
+          },
+          {
+            label: 'Void At',
+            value: formatDateTime(transaction.void_at),
+          },
+        ]
+      : []),
+  ];
+
   return (
 
-    <div className="p-6">
+    <div className="min-h-screen bg-slate-100 p-4 text-slate-900 sm:p-6">
 
-      <h1
-        className="
-          text-3xl
-          font-bold
-          mb-6
-        "
-      >
-
-        Transaction Detail
-
-      </h1>
+      <ConfirmDialog
+        open={showVoidDialog}
+        title="Void transaksi?"
+        message={`Invoice ${transaction?.invoice_no || '-'} akan dibatalkan. Stok lokal akan dikembalikan sesuai item transaksi.`}
+        confirmLabel="Void transaksi"
+        tone="danger"
+        inputLabel="Alasan void"
+        inputValue={voidReason}
+        inputPlaceholder="Contoh: salah input item atau pelanggan membatalkan pembelian"
+        onInputChange={setVoidReason}
+        onCancel={() => setShowVoidDialog(false)}
+        onConfirm={confirmVoidTransaction}
+      />
 
       <div
         className="
-            mb-6
+          mx-auto
+          max-w-6xl
+          space-y-6
         "
+      >
+
+      <div
+        className="
+          flex
+          flex-col
+          gap-4
+          rounded-xl
+          border
+          border-slate-200
+          bg-white
+          p-5
+          shadow-sm
+          sm:flex-row
+          sm:items-center
+          sm:justify-between
+        "
+      >
+        <div className="min-w-0">
+          <div className="text-xs font-bold uppercase tracking-wide text-blue-600">
+            Transaction Detail
+          </div>
+          <h1
+            className="
+              mt-1
+              truncate
+              text-2xl
+              font-black
+              text-slate-950
+              sm:text-3xl
+            "
+          >
+            {transaction.invoice_no}
+          </h1>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span
+              className={`
+                inline-flex
+                items-center
+                rounded-full
+                px-3
+                py-1
+                text-xs
+                font-bold
+                uppercase
+                ring-1
+                ${statusClass}
+              `}
+            >
+              {transaction.sync_status || 'unknown'}
+            </span>
+            <span className="text-sm font-medium text-slate-500">
+              {formatDateTime(transaction.transaction_time || transaction.created_at)}
+            </span>
+          </div>
+        </div>
+
+        <div
+          className="
+            flex
+            flex-wrap
+            gap-2
+          "
         >
+
+        <Link
+          to="/sync-dashboard"
+          className="
+            rounded-lg
+            bg-slate-700
+            px-4
+            py-2
+            font-semibold
+            text-white
+            hover:bg-slate-800
+          "
+        >
+          Back Sync Dashboard
+        </Link>
 
         <button
 
-            onClick={printReceipt}
+            onClick={openPrintPreview}
 
             className="
             bg-green-600
@@ -515,6 +515,7 @@ TransactionDetailPage() {
             px-4
             py-2
             rounded-lg
+            font-semibold
             "
 
         >
@@ -535,7 +536,7 @@ TransactionDetailPage() {
               py-2
               rounded-lg
               text-white
-              ml-2
+              font-semibold
 
               ${
 
@@ -564,145 +565,85 @@ TransactionDetailPage() {
         </button>
 
         </div>
+      </div>
 
       <div
         className="
           bg-white
           rounded-xl
-          shadow
-          p-4
-          mb-6
+          border
+          border-slate-200
+          shadow-sm
+          overflow-hidden
         "
       >
 
-        <div class="invoice">
-
-          Invoice:
-
-          {transaction.invoice_no}
-
-        </div>
-
-        <div>
-
-          UUID:
-
-          {transaction.transaction_uuid}
-
-        </div>
-
-        <div>
-
-          Status:
-
-          {transaction.sync_status}
-
-        </div>
-
-        <div>
-
-          Retry Count:
-
-          {transaction.retry_count || 0}
-
-        </div>
-
-        <div>
-
-          Total:
-
-          Rp
-
-          {Number(
-            transaction.total
-          ).toLocaleString()}
-
-        </div>
-
-        <div>
-
-          Paid :
-
-          Rp {Number(
-            transaction.paid_amount || 0
-          ).toLocaleString()}
-
-        </div>
-
-        <div>
-
-          Change :
-
-          Rp {Number(
-            transaction.change_amount || 0
-          ).toLocaleString()}
-
-        </div>
-
-        <div>
-
-          Cashier :
-
-          { 
-            transaction.cashier_name|| 'Administrator'
-          }
-
-        </div>
-
-        <div>
-
-            Void Status :
-
-            {
-
-              transaction.void_status
-
-                ? 'YES'
-
-                : 'NO'
-
-            }
-
+        <div className="border-b border-slate-200 bg-slate-900 px-5 py-4 text-white">
+          <div className="text-xs font-bold uppercase tracking-wide text-blue-200">
+            Ringkasan Pembayaran
           </div>
-          {
+          <div className="mt-1 text-sm text-slate-300">
+            Status dan nilai transaksi kasir
+          </div>
+        </div>
 
-            transaction.void_status && (
+        <div className="grid gap-4 p-5 sm:grid-cols-3">
+          {summaryItems.map((item) => (
+            <div
+              key={item.label}
+              className="
+                rounded-lg
+                border
+                border-slate-200
+                bg-slate-50
+                p-4
+              "
+            >
+              <div className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                {item.label}
+              </div>
+              <div className={`mt-2 text-2xl font-black ${item.tone}`}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
 
-              <>
-
-                <div>
-
-                  Void Reason :
-
-                  {
-
-                    transaction.void_reason
-
+        <div className="grid border-t border-slate-200 sm:grid-cols-2 lg:grid-cols-3">
+          {detailItems.map((item) => (
+            <div
+              key={item.label}
+              className="
+                border-b
+                border-slate-200
+                px-5
+                py-4
+                last:border-b-0
+                sm:border-r
+                lg:[&:nth-child(3n)]:border-r-0
+              "
+            >
+              <div className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                {item.label}
+              </div>
+              <div
+                className={`
+                  mt-1
+                  break-words
+                  text-sm
+                  ${
+                    item.strong
+                      ? 'font-black text-slate-950'
+                      : 'font-semibold text-slate-700'
                   }
-
-                </div>
-
-                <div>
-
-                  Void At :
-
-                  {
-
-                    new Date(
-
-                      transaction.void_at
-
-                    ).toLocaleString()
-
-                  }
-
-                </div>
-
-              </>
-
-            )
-
-          }
+                  ${item.mono ? 'font-mono text-xs' : ''}
+                `}
+              >
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
 
       </div>
 
@@ -710,38 +651,41 @@ TransactionDetailPage() {
         className="
           bg-white
           rounded-xl
-          shadow
-          p-4
-          mb-6
+          border
+          border-slate-200
+          shadow-sm
+          overflow-hidden
         "
       >
 
-        <h2
-          className="
-            font-bold
-            mb-4
-          "
-        >
+        <div className="border-b border-slate-200 px-5 py-4">
+          <h2 className="text-lg font-black text-slate-900">
+            Items
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Produk yang tercatat pada transaksi ini
+          </p>
+        </div>
 
-          Items
-
-        </h2>
+        <div className="overflow-x-auto">
 
         <table
           className="
             w-full
+            min-w-[520px]
+            text-sm
           "
         >
 
-          <thead>
+          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
 
             <tr>
 
-              <th>Product</th>
+              <th className="px-5 py-3 text-left">Product</th>
 
-              <th>Qty</th>
+              <th className="px-5 py-3 text-center">Qty</th>
 
-              <th>Price</th>
+              <th className="px-5 py-3 text-right">Price</th>
 
             </tr>
 
@@ -755,9 +699,12 @@ TransactionDetailPage() {
 
                 (item,index)=>(
 
-                  <tr key={index}>
+                  <tr
+                    key={index}
+                    className="border-t border-slate-100"
+                  >
 
-                    <td>
+                    <td className="px-5 py-3 font-semibold text-slate-800">
 
                       {
 
@@ -771,22 +718,15 @@ TransactionDetailPage() {
 
                     </td>
 
-                    <td>
+                    <td className="px-5 py-3 text-center text-slate-600">
 
                       {item.qty}
 
                     </td>
 
-                    <td>
+                    <td className="px-5 py-3 text-right font-bold text-slate-900">
 
-                      {
-
-                        Number(
-                          item.price
-                        )
-                        .toLocaleString()
-
-                      }
+                      {formatCurrency(item.price)}
 
                     </td>
 
@@ -802,14 +742,18 @@ TransactionDetailPage() {
 
         </table>
 
+        </div>
+
       </div>
 
       <div
         className="
           bg-white
           rounded-xl
-          shadow
-          p-4
+          border
+          border-slate-200
+          shadow-sm
+          p-5
         "
       >
 
@@ -869,6 +813,36 @@ TransactionDetailPage() {
           )
 
         }
+
+      </div>
+
+      <PrintTemplatePreview
+        transaction={
+          showPrintPreview
+            ? {
+                ...transaction,
+                store_name:
+                  store?.name,
+                store_address:
+                  store?.address,
+                store_phone:
+                  store?.phone,
+                store_email:
+                  store?.email,
+                store_website:
+                  store?.website,
+                tenant_name:
+                  tenant?.name,
+                terminal_name:
+                  terminal?.name,
+              }
+            : null
+        }
+        message="Pilih template bukti transaksi sebelum mencetak."
+        onClose={() =>
+          setShowPrintPreview(false)
+        }
+      />
 
       </div>
 

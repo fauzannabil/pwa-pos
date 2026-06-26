@@ -9,6 +9,32 @@ from 'vite-plugin-pwa';
 
 export default defineConfig({
 
+  server: {
+
+    host:
+      '127.0.0.1',
+
+    port:
+      5174,
+
+    strictPort:
+      true,
+
+  },
+
+  preview: {
+
+    host:
+      '127.0.0.1',
+
+    port:
+      4174,
+
+    strictPort:
+      true,
+
+  },
+
   plugins: [
 
     react(),
@@ -16,7 +42,7 @@ export default defineConfig({
     VitePWA({
 
       registerType:
-        'autoUpdate',
+        'prompt',
 
       includeAssets: [
 
@@ -113,54 +139,6 @@ export default defineConfig({
 
                 maxAgeSeconds:
                   60 * 60 * 24 * 30,
-
-              },
-
-              cacheableResponse: {
-
-                statuses: [0, 200],
-
-              },
-
-            },
-
-          },
-
-          /*
-          |--------------------------------
-          | API Cache
-          |--------------------------------
-          */
-
-          {
-
-            urlPattern:
-              ({ url }) => {
-
-                return url.pathname.startsWith(
-                  '/api/'
-                );
-
-              },
-
-            handler:
-              'NetworkFirst',
-
-            options: {
-
-              cacheName:
-                'api-cache',
-
-              networkTimeoutSeconds:
-                5,
-
-              expiration: {
-
-                maxEntries:
-                  100,
-
-                maxAgeSeconds:
-                  60 * 60 * 24,
 
               },
 

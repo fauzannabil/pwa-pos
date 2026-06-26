@@ -1,6 +1,8 @@
 import {
 
   useEffect,
+  useCallback,
+  useMemo,
   useState,
 
 } from 'react';
@@ -10,6 +12,9 @@ import {
 } from 'react-router-dom';
 
 import db from '../db/db';
+import {
+  getLocalProducts
+} from '../services/productService';
 
 import {
 
@@ -17,6 +22,8 @@ import {
   getTodayRevenue,
   getTodayTransactions,
   getTopProducts,
+  filterTransactionsByScope,
+  getTransactionScope,
 
 } from '../services/transactionService';
 
@@ -26,8 +33,41 @@ import SalesChart
   import HourlySalesChart
 from '../components/dashboard/HourlySalesChart';
 
+import useAuthStore
+  from '../stores/authStore';
+
 export default function
 DashboardPage() {
+
+  const tenant =
+    useAuthStore(
+      (state) =>
+        state.tenant
+    );
+
+  const store =
+    useAuthStore(
+      (state) =>
+        state.store
+    );
+
+  const terminal =
+    useAuthStore(
+      (state) =>
+        state.terminal
+    );
+
+  const context =
+    useMemo(() =>
+      getTransactionScope({
+      tenant,
+      store,
+      terminal,
+    }), [
+      tenant,
+      store,
+      terminal
+    ]);
 
   const [
 
@@ -69,8 +109,8 @@ DashboardPage() {
     setFailedCount,
   ] = useState(0);
 
-  async function
-  loadDashboard() {
+  const loadDashboard =
+    useCallback(async () => {
 
     try {
 
@@ -82,8 +122,9 @@ DashboardPage() {
 
       const products =
 
-        await db.products
-          .toArray();
+        await getLocalProducts(
+          context
+        );
 
       setTotalProducts(
         products.length
@@ -97,7 +138,9 @@ DashboardPage() {
 
       const transactions =
 
-        await getTodayTransactions();
+        await getTodayTransactions(
+          context
+        );
 
       setTotalTransactions(
         transactions.length
@@ -111,7 +154,9 @@ DashboardPage() {
 
       const revenue =
 
-        await getTodayRevenue();
+        await getTodayRevenue(
+          context
+        );
 
       setTotalRevenue(
         revenue
@@ -125,7 +170,9 @@ DashboardPage() {
 
       const pending =
 
-        await getPendingCount();
+        await getPendingCount(
+          context
+        );
 
       setPendingCount(
         pending
@@ -139,7 +186,9 @@ DashboardPage() {
 
       const top =
 
-        await getTopProducts();
+        await getTopProducts(
+          context
+        );
 
       setTopProducts(
         top
@@ -150,36 +199,38 @@ DashboardPage() {
       |------------------------------
       */
 
-      const failed =
+      const failedTransactions =
 
-        await db.transactions
+        filterTransactionsByScope(
+
+          await db.transactions
 
           .where('sync_status')
 
           .equals('failed')
 
-          .count();
+          .toArray(),
+
+          context
+
+        );
 
       setFailedCount(
-        failed
+        failedTransactions.length
       );
 
 
 
 
-    } catch (error) {
+    } catch {}
 
-      console.log(error);
-
-    }
-
-  }
+  }, [context]);
 
   useEffect(() => {
 
     loadDashboard();
 
-  }, []);
+  }, [loadDashboard]);
 
   return (
 
@@ -232,7 +283,7 @@ DashboardPage() {
 
         <Link
 
-          to="/pos"
+          to="/"
 
           className="
             bg-blue-600
@@ -567,11 +618,11 @@ DashboardPage() {
       </div>
 
   <div className="mb-8">
-    <SalesChart />
+    <SalesChart context={context} />
   </div>
 
   <div className="mb-8">
-    <HourlySalesChart />
+    <HourlySalesChart context={context} />
   </div>
 
       {/* TOP PRODUCTS */}

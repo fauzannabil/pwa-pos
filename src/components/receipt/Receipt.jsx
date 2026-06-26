@@ -21,7 +21,7 @@ export default function Receipt({
       <div className="text-center mb-4">
 
         <h1 className="text-2xl font-bold">
-          MY POS
+          UNTANPoS
         </h1>
 
         <div className="text-sm">
@@ -170,6 +170,9 @@ export default function Receipt({
       >
 
         Thank You
+        <div className="mt-2 font-bold text-slate-500">
+          UNTANPoS
+        </div>
 
       </div>
 

@@ -2,9 +2,126 @@ import db from '../db/db';
 import api from '../api/api';
 import { reduceLocalStock } from './productService';
 import { addAuditLog } from './auditService';
+import {
+  getApiErrorMessage,
+  hasTenantContext,
+  validateSyncContext
+} from '../utils/saasContext';
 
 
 let syncInProgress = false;
+
+function getTransactionContextError(transaction) {
+
+  const missing = [];
+
+  if (!transaction?.tenant_id) missing.push('tenant_id');
+  if (!transaction?.store_id) missing.push('store_id');
+  if (!transaction?.terminal_id) missing.push('terminal_id');
+
+  return missing.length > 0
+    ? `Transaction context incomplete: ${missing.join(', ')}`
+    : null;
+
+}
+
+function getTransactionContext(transaction) {
+
+  return {
+    tenant_id: transaction?.tenant_id || null,
+    store_id: transaction?.store_id || null,
+    terminal_id: transaction?.terminal_id || null,
+  };
+
+}
+
+export function
+getTransactionScope({
+  tenant = null,
+  store = null,
+  terminal = null,
+} = {}) {
+
+  return {
+    tenant_id:
+      tenant?.id || null,
+    store_id:
+      store?.id || null,
+    terminal_id:
+      terminal?.id || null,
+  };
+
+}
+
+function hasScope(context = null) {
+
+  return Boolean(
+    context?.tenant_id &&
+    context?.store_id &&
+    context?.terminal_id
+  );
+
+}
+
+function sameId(a, b) {
+
+  return String(a) === String(b);
+
+}
+
+export function
+matchesTransactionScope(transaction, context = null) {
+
+  if (!hasScope(context)) {
+
+    return true;
+
+  }
+
+  return Boolean(
+    transaction?.tenant_id &&
+    transaction?.store_id &&
+    transaction?.terminal_id &&
+    sameId(transaction.tenant_id, context.tenant_id) &&
+    sameId(transaction.store_id, context.store_id) &&
+    sameId(transaction.terminal_id, context.terminal_id)
+  );
+
+}
+
+function assertTransactionScope(
+  transaction,
+  context = null
+) {
+
+  if (
+    context &&
+    !matchesTransactionScope(
+      transaction,
+      context
+    )
+  ) {
+
+    throw new Error(
+      'Transaksi tidak berada dalam tenant/store/terminal aktif.'
+    );
+
+  }
+
+}
+
+export function
+filterTransactionsByScope(transactions, context = null) {
+
+  return (transactions || []).filter(
+    (transaction) =>
+      matchesTransactionScope(
+        transaction,
+        context
+      )
+  );
+
+}
 
 /*
 |--------------------------------
@@ -24,6 +141,20 @@ export async function
     transaction
   ) {
 
+  if (
+    !hasTenantContext({
+      tenant: { id: transaction.tenant_id },
+      store: { id: transaction.store_id },
+      terminal: { id: transaction.terminal_id },
+    })
+  ) {
+
+    throw new Error(
+      'POS context belum lengkap. Login ulang atau hubungi admin.'
+    );
+
+  }
+
   await db.transaction(
 
     'rw',
@@ -31,6 +162,7 @@ export async function
     db.transactions,
     db.products,
     db.audit_logs,
+    db.stock_movements,
 
     async () => {
 
@@ -49,6 +181,8 @@ export async function
 
         retry_count: 0,
 
+        void_retry_count: 0,
+
         last_error: null,
 
         last_sync_at: null,
@@ -60,12 +194,15 @@ export async function
         void_at: null,
         void_reason: null,
         void_by: null,
+        void_sync_status: null,
 
       });
 
       await addAuditLog(
         transaction.transaction_uuid,
-        'TRANSACTION_CREATED'
+        'TRANSACTION_CREATED',
+        null,
+        getTransactionContext(transaction)
       );
 
 
@@ -77,7 +214,8 @@ export async function
 
       await reduceLocalStock(
         transaction.items,
-        transaction.invoice_no
+        transaction.invoice_no,
+        getTransactionContext(transaction)
       );
 
     }
@@ -93,19 +231,25 @@ export async function
 */
 
 export async function
-getPendingTransactions() {
+getPendingTransactions(context = null) {
 
-  return await db.transactions
+  const transactions =
+
+    await db.transactions
 
     .where('sync_status')
 
     .anyOf(
       'pending',
-      'retry',
-      'failed'
+      'retry'
     )
 
     .toArray();
+
+  return filterTransactionsByScope(
+    transactions,
+    context
+  );
 
 }
 
@@ -116,19 +260,47 @@ getPendingTransactions() {
 */
 
 export async function
-countPendingTransactions() {
+countPendingTransactions(context = null) {
 
-  return await db.transactions
+  const salePendingCount =
 
-    .where('sync_status')
+    filterTransactionsByScope(
 
-    .anyOf(
-      'pending',
-      'retry',
-      'failed'
-    )
+      await db.transactions
 
-    .count();
+      .where('sync_status')
+
+      .anyOf(
+        'pending',
+        'retry'
+      )
+
+      .toArray(),
+
+      context
+
+    ).length;
+
+  const voidPendingCount =
+
+    filterTransactionsByScope(
+
+      await db.transactions
+
+      .where('void_sync_status')
+
+      .anyOf(
+        'pending',
+        'retry'
+      )
+
+      .toArray(),
+
+      context
+
+    ).length;
+
+  return salePendingCount + voidPendingCount;
 
 }
 
@@ -139,7 +311,20 @@ countPendingTransactions() {
 */
 
 export async function
-  syncPendingTransactions() {
+  syncPendingTransactions(context = null) {
+
+  const syncValidation =
+    validateSyncContext(
+      context
+    );
+
+  if (!syncValidation.ok) {
+
+    throw new Error(
+      syncValidation.reason
+    );
+
+  }
 
   // prevent double sync
 
@@ -155,7 +340,7 @@ export async function
 
     const pendingTransactions =
 
-      await getPendingTransactions();
+      await getPendingTransactions(context);
 
     let syncedCount = 0;
 
@@ -168,6 +353,47 @@ export async function
 
       try {
 
+        const contextError =
+          getTransactionContextError(trx);
+
+        if (contextError) {
+
+          await db.transactions.update(
+
+            trx.id,
+
+            {
+
+              sync_status:
+                'failed',
+
+              last_error:
+                contextError,
+
+              last_sync_at:
+                new Date(),
+
+              updated_at:
+                new Date(),
+
+            }
+
+          );
+
+          await addAuditLog(
+
+            trx.transaction_uuid,
+
+            'TRANSACTION_FAILED',
+
+            contextError
+
+          );
+
+          continue;
+
+        }
+
         // max retry protection
 
         if (
@@ -178,9 +404,36 @@ export async function
 
         ) {
 
-          console.log(
-            'Max retry reached:',
-            trx.invoice
+          await db.transactions.update(
+
+            trx.id,
+
+            {
+
+              sync_status:
+                'failed',
+
+              last_error:
+                'Max retry reached',
+
+              last_sync_at:
+                new Date(),
+
+              updated_at:
+                new Date(),
+
+            }
+
+          );
+
+          await addAuditLog(
+
+            trx.transaction_uuid,
+
+            'TRANSACTION_FAILED',
+
+            'Max retry reached'
+
           );
 
           continue;
@@ -216,8 +469,20 @@ export async function
             transaction_uuid:
               trx.transaction_uuid,
 
+            tenant_id:
+              trx.tenant_id,
+
+            store_id:
+              trx.store_id,
+
+            terminal_id:
+              trx.terminal_id,
+
             cashier_id:
               trx.cashier_id,
+
+            cashier_shift_id:
+              trx.cashier_shift_id,
 
             invoice_no:
               trx.invoice_no,
@@ -286,8 +551,6 @@ export async function
       }
   catch (error) {
 
-    console.log(error);
-
     /*
     |--------------------------------
     | Detect Conflict Error
@@ -296,11 +559,10 @@ export async function
 
     const errorMessage =
 
-      error?.response?.data?.error ||
-
-      error?.message ||
-
-      'Sync failed';
+      getApiErrorMessage(
+        error,
+        'Sync failed'
+      );
 
     const isConflict =
 
@@ -337,7 +599,20 @@ export async function
           last_sync_at:
             new Date(),
 
+          updated_at:
+            new Date(),
+
         }
+
+      );
+
+      await addAuditLog(
+
+        trx.transaction_uuid,
+
+        'TRANSACTION_CONFLICT',
+
+        errorMessage
 
       );
 
@@ -361,8 +636,52 @@ export async function
       |--------------------------------
       */
 
-    if ( statusCode === 422 ||
-        statusCode === 400 ) 
+    if (
+      statusCode === 402 ||
+      statusCode === 403
+    )
+     {
+
+        await db.transactions.update(
+
+          trx.id,
+
+          {
+
+            sync_status:
+              'blocked',
+
+            last_error:
+              errorMessage,
+
+            last_sync_at:
+              new Date(),
+
+            updated_at:
+              new Date(),
+
+          }
+
+        );
+
+        await addAuditLog(
+
+          trx.transaction_uuid,
+
+          'TRANSACTION_BLOCKED',
+
+          errorMessage
+
+        );
+
+      }
+
+    else if (
+      statusCode === 422 ||
+      statusCode === 401 ||
+      statusCode === 404 ||
+      statusCode === 400
+    )
      {
 
         await db.transactions.update(
@@ -376,23 +695,27 @@ export async function
 
               last_error:
 
-                error?.response?.data?.message ||
-
-                error.message ||
-
-                'Validation failed',
+                errorMessage,
 
               last_sync_at:
+                new Date(),
+
+              updated_at:
                 new Date(),
 
             }
 
         );
 
-            console.log(
-              'Hard failed:',
-              trx.invoice_no
-            );
+        await addAuditLog(
+
+          trx.transaction_uuid,
+
+          'TRANSACTION_FAILED',
+
+          errorMessage
+
+        );
 
       }
 
@@ -404,6 +727,16 @@ export async function
 
         else {
 
+            const nextRetryCount =
+
+              Number(
+                trx.retry_count || 0
+              ) + 1;
+
+            const retryLimitReached =
+
+              nextRetryCount >= MAX_RETRY;
+
             await db.transactions.update(
 
               trx.id,
@@ -411,21 +744,23 @@ export async function
               {
 
                 sync_status:
-                  'retry',
+                  retryLimitReached
+                    ? 'failed'
+                    : 'retry',
 
                 retry_count:
-
-                  Number(
-                    trx.retry_count || 0
-                  ) + 1,
+                  nextRetryCount,
 
                 last_error:
 
-                  error.message ||
-
-                  'Sync failed',
+                  retryLimitReached
+                    ? 'Max retry reached'
+                    : errorMessage,
 
                 last_sync_at:
+                  new Date(),
+
+                updated_at:
                   new Date(),
 
               }
@@ -438,12 +773,12 @@ export async function
 
               'TRANSACTION_RETRY',
 
-              error.message
+              errorMessage
 
             );
 
             if (
-              Number(trx.retry_count || 0) + 1 >= MAX_RETRY
+              retryLimitReached
             ) {
 
               await addAuditLog(
@@ -475,6 +810,210 @@ export async function
 
 }
 
+export async function
+syncPendingVoids(context = null) {
+
+  const syncValidation =
+    validateSyncContext(
+      context
+    );
+
+  if (!syncValidation.ok) {
+
+    throw new Error(
+      syncValidation.reason
+    );
+
+  }
+
+  if (syncInProgress) {
+
+    return 0;
+
+  }
+
+  syncInProgress = true;
+
+  try {
+
+    const pendingVoids =
+
+      filterTransactionsByScope(
+
+        await db.transactions
+
+        .where('void_sync_status')
+
+        .anyOf(
+          'pending',
+          'retry'
+        )
+
+        .toArray(),
+
+        context
+
+      );
+
+    let syncedCount = 0;
+
+    const MAX_RETRY = 10;
+
+    for (const trx of pendingVoids) {
+
+      const nextRetryCount =
+        Number(trx.void_retry_count || 0) + 1;
+
+      try {
+
+        await db.transactions.update(
+          trx.id,
+          {
+            sync_status:
+              'void_syncing',
+            void_sync_status:
+              'syncing',
+            last_sync_at:
+              new Date(),
+            updated_at:
+              new Date(),
+          }
+        );
+
+        await api.post(
+          `/pos-transactions/${trx.transaction_uuid}/void`,
+          {
+            reason:
+              trx.void_reason ||
+              'Void from POS',
+            voided_at:
+              trx.void_at ||
+              new Date().toISOString(),
+          }
+        );
+
+        await db.transactions.update(
+          trx.id,
+          {
+            sync_status:
+              'void_synced',
+            void_sync_status:
+              'synced',
+            synced_at:
+              new Date(),
+            last_sync_at:
+              new Date(),
+            last_error:
+              null,
+            updated_at:
+              new Date(),
+          }
+        );
+
+        await addAuditLog(
+          trx.transaction_uuid,
+          'TRANSACTION_VOID_SYNCED',
+          null,
+          getTransactionContext(trx)
+        );
+
+        syncedCount++;
+
+      } catch (error) {
+
+        const statusCode =
+          error?.response?.status;
+
+        const errorMessage =
+          getApiErrorMessage(
+            error,
+            'Void sync failed'
+          );
+
+        if (
+          statusCode === 402 ||
+          statusCode === 403
+        ) {
+
+          await db.transactions.update(
+            trx.id,
+            {
+              sync_status:
+                'void_blocked',
+              void_sync_status:
+                'blocked',
+              last_error:
+                errorMessage,
+              last_sync_at:
+                new Date(),
+              updated_at:
+                new Date(),
+            }
+          );
+
+          await addAuditLog(
+            trx.transaction_uuid,
+            'TRANSACTION_VOID_BLOCKED',
+            errorMessage,
+            getTransactionContext(trx)
+          );
+
+          continue;
+
+        }
+
+        const retryLimitReached =
+          nextRetryCount >= MAX_RETRY;
+
+        await db.transactions.update(
+          trx.id,
+          {
+            sync_status:
+              retryLimitReached
+                ? 'void_failed'
+                : 'void_retry',
+            void_sync_status:
+              retryLimitReached
+                ? 'failed'
+                : 'retry',
+            void_retry_count:
+              nextRetryCount,
+            last_error:
+              retryLimitReached
+                ? 'Max void retry reached'
+                : errorMessage,
+            last_sync_at:
+              new Date(),
+            updated_at:
+              new Date(),
+          }
+        );
+
+        await addAuditLog(
+          trx.transaction_uuid,
+          retryLimitReached
+            ? 'TRANSACTION_VOID_FAILED'
+            : 'TRANSACTION_VOID_RETRY',
+          retryLimitReached
+            ? 'Max void retry reached'
+            : errorMessage,
+          getTransactionContext(trx)
+        );
+
+      }
+
+    }
+
+    return syncedCount;
+
+  } finally {
+
+    syncInProgress = false;
+
+  }
+
+}
+
 /*
 |--------------------------------
 | Get Local Transactions
@@ -482,15 +1021,22 @@ export async function
 */
 
 export async function
-getLocalTransactions() {
+getLocalTransactions(context = null) {
 
-  return await db.transactions
+  const transactions =
+
+    await db.transactions
 
     .orderBy('transaction_time') //.orderBy('created_at')
 
     .reverse()
 
     .toArray();
+
+  return filterTransactionsByScope(
+    transactions,
+    context
+  );
 
 }
 
@@ -501,15 +1047,13 @@ getLocalTransactions() {
 */
 
 export async function
-getTransactions() {
+getTransactions(context = null) {
 
   try {
 
-    return await getLocalTransactions();
+    return await getLocalTransactions(context);
 
-  } catch (error) {
-
-    console.log(error);
+  } catch {
 
     return [];
 
@@ -524,12 +1068,18 @@ getTransactions() {
 */
 
 export async function
-getTodayTransactions() {
+getTodayTransactions(context = null) {
 
   const transactions =
 
-    await db.transactions
-      .toArray();
+    filterTransactionsByScope(
+
+      await db.transactions
+        .toArray(),
+
+      context
+
+    );
 
   const today =
 
@@ -557,11 +1107,11 @@ getTodayTransactions() {
 */
 
 export async function
-getTodayRevenue() {
+getTodayRevenue(context = null) {
 
   const transactions =
 
-    await getTodayTransactions();
+    await getTodayTransactions(context);
 
   return transactions.reduce(
 
@@ -586,12 +1136,18 @@ getTodayRevenue() {
 */
 
 export async function
-getTopProducts() {
+getTopProducts(context = null) {
 
   const transactions =
 
-    await db.transactions
-      .toArray();
+    filterTransactionsByScope(
+
+      await db.transactions
+        .toArray(),
+
+      context
+
+    );
 
   const map = {};
 
@@ -641,14 +1197,20 @@ getTopProducts() {
 */
 
 export async function
-getPendingCount() {
+getPendingCount(context = null) {
 
   const transactions =
 
-    await db.transactions
+    filterTransactionsByScope(
+
+      await db.transactions
       .where('sync_status')
       .equals('pending')
-      .toArray();
+      .toArray(),
+
+      context
+
+    );
 
   return transactions.length;
 
@@ -661,12 +1223,18 @@ getPendingCount() {
 */
 
 export async function
-getWeeklySales() {
+getWeeklySales(context = null) {
 
   const transactions =
 
-    await db.transactions
-      .toArray();
+    filterTransactionsByScope(
+
+      await db.transactions
+        .toArray(),
+
+      context
+
+    );
 
   const result = [];
 
@@ -735,7 +1303,52 @@ getWeeklySales() {
 */
 
 export async function
-forceRetryTransaction(id) {
+forceRetryTransaction(
+  id,
+  context = null
+) {
+
+  const trx =
+    await db.transactions.get(
+      Number(id)
+    );
+
+  if (!trx) {
+
+    return;
+
+  }
+
+  assertTransactionScope(
+    trx,
+    context
+  );
+
+  if (trx.void_status) {
+
+    await db.transactions.update(
+
+      id,
+
+      {
+
+        sync_status: 'void_pending',
+
+        void_sync_status: 'pending',
+
+        void_retry_count: 0,
+
+        last_error: null,
+
+        updated_at: new Date(),
+
+      }
+
+    );
+
+    return;
+
+  }
 
   await db.transactions.update(
 
@@ -764,10 +1377,69 @@ forceRetryTransaction(id) {
 */
 
 export async function
-deleteTransaction(id) {
+deleteTransaction(
+  id,
+  context = null
+) {
+
+  const trx =
+    await db.transactions.get(
+      Number(id)
+    );
+
+  if (!trx) {
+
+    return 0;
+
+  }
+
+  assertTransactionScope(
+    trx,
+    context
+  );
 
   return await db.transactions
     .delete(id);
+
+}
+
+export async function
+markTransactionFailed(
+  id,
+  context = null
+) {
+
+  const trx =
+    await db.transactions.get(
+      Number(id)
+    );
+
+  if (!trx) {
+
+    return;
+
+  }
+
+  assertTransactionScope(
+    trx,
+    context
+  );
+
+  await db.transactions.update(
+
+    trx.id,
+
+    {
+
+      sync_status:
+        'failed',
+
+      updated_at:
+        new Date(),
+
+    }
+
+  );
 
 }
 
@@ -778,11 +1450,11 @@ deleteTransaction(id) {
 */
 
 export async function
-getHourlySales() {
+getHourlySales(context = null) {
 
   const transactions =
 
-    await getTodayTransactions();
+    await getTodayTransactions(context);
 
   const result = [];
 
@@ -843,7 +1515,9 @@ getHourlySales() {
 
 export async function voidTransaction(
   transactionId,
-  reason
+  reason,
+  context = null,
+  actor = null
 ) {
 
   const trx =
@@ -868,12 +1542,38 @@ export async function voidTransaction(
 
   }
 
+  if (
+    context &&
+    !matchesTransactionScope(
+      trx,
+      context
+    )
+  ) {
+
+    throw new Error(
+      'Transaction not found in active store.'
+    );
+
+  }
+
+  if (
+    actor?.id &&
+    String(trx.cashier_id) !== String(actor.id)
+  ) {
+
+    throw new Error(
+      'Anda tidak dapat membatalkan transaksi milik kasir lain.'
+    );
+
+  }
+
   await db.transaction(
 
     'rw',
 
     db.transactions,
     db.products,
+    db.stock_movements,
 
     async () => {
 
@@ -905,9 +1605,44 @@ export async function voidTransaction(
 
           );
 
+          await db.stock_movements.add({
+
+            ...getTransactionContext(trx),
+
+            product_id:
+              Number(item.product_id),
+
+            product_name:
+              product.title,
+
+            type:
+              'VOID',
+
+            qty:
+              Number(item.qty || 0),
+
+            stock_before:
+              Number(product.stock || 0),
+
+            stock_after:
+              Number(product.stock || 0) +
+              Number(item.qty || 0),
+
+            reference_no:
+              trx.invoice_no,
+
+            created_at:
+              new Date()
+
+          });
+
         }
 
       }
+
+      const shouldSyncVoid =
+
+        trx.sync_status === 'synced';
 
       await db.transactions.update(
 
@@ -930,7 +1665,17 @@ export async function voidTransaction(
             'Administrator',
 
           sync_status:
-            'void'
+            shouldSyncVoid
+              ? 'void_pending'
+              : 'void',
+
+          void_sync_status:
+            shouldSyncVoid
+              ? 'pending'
+              : 'not_required',
+
+          void_retry_count:
+            0
 
         }
 
@@ -950,7 +1695,9 @@ export async function voidTransaction(
 
         reason
 
-      })
+      }),
+
+      getTransactionContext(trx)
 
     );
 

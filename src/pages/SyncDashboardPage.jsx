@@ -1,5 +1,7 @@
 import {
   useEffect,
+  useCallback,
+  useMemo,
   useState
 } from 'react';
 
@@ -7,17 +9,72 @@ import db from '../db/db';
 
 import {  
   syncPendingTransactions,
+  syncPendingVoids,
   forceRetryTransaction,
-   deleteTransaction
+  deleteTransaction,
+  filterTransactionsByScope,
+  getTransactionScope
   } from '../services/transactionService';
 
 import { addAuditLog } from '../services/auditService';
 
 import { Link } from 'react-router-dom';
 import { exportTransactionsToExcel  } from '../services/exportService';
+import useAuthStore from '../stores/authStore';
+import {
+  countTransactionsByCategory,
+  getEffectiveTransactionStatus,
+  getTransactionStatusClass,
+  getTransactionStatusLabel,
+  matchesTransactionStatusFilter
+} from '../utils/transactionStatus';
+import {
+  filterTransactionsForUser
+} from '../utils/authz';
+import {
+  showToast
+} from '../utils/uiFeedback';
+import ConfirmDialog
+  from '../components/ui/ConfirmDialog';
 
 export default function
 SyncDashboardPage() {
+
+  const tenant =
+    useAuthStore(
+      (state) =>
+        state.tenant
+    );
+
+  const store =
+    useAuthStore(
+      (state) =>
+        state.store
+    );
+
+  const terminal =
+    useAuthStore(
+      (state) =>
+        state.terminal
+    );
+
+  const user =
+    useAuthStore(
+      (state) =>
+        state.user
+    );
+
+  const context =
+    useMemo(() =>
+      getTransactionScope({
+      tenant,
+      store,
+      terminal,
+    }), [
+      tenant,
+      store,
+      terminal
+    ]);
 
   const [transactions,
     setTransactions] =
@@ -31,8 +88,13 @@ SyncDashboardPage() {
     setFilter] =
       useState('all');
 
-  async function
-  loadTransactions() {
+  const [
+    deleteTarget,
+    setDeleteTarget
+  ] = useState(null);
+
+  const loadTransactions =
+    useCallback(async () => {
 
     const data =
 
@@ -46,9 +108,20 @@ SyncDashboardPage() {
 
         .toArray();
 
-    setTransactions(data);
+    setTransactions(
+      filterTransactionsForUser(
+        filterTransactionsByScope(
+          data,
+          context
+        ),
+        user
+      )
+    );
 
-  }
+  }, [
+    context,
+    user
+  ]);
 
     useEffect(() => {
 
@@ -70,7 +143,7 @@ SyncDashboardPage() {
 
       return () => clearInterval(interval);
 
-    }, []);
+    }, [loadTransactions]);
 
   async function
   handleRetry() {
@@ -79,17 +152,32 @@ SyncDashboardPage() {
 
     try {
 
-      await syncPendingTransactions();
+      await syncPendingTransactions(context);
+
+      await syncPendingVoids(context);
 
       await loadTransactions();
 
-      alert(
-        'Sync completed'
-      );
+      showToast({
+        title:
+          'Sync selesai',
+        message:
+          'Transaksi pending sudah diproses.',
+        tone:
+          'success',
+      });
 
     } catch (error) {
 
-      console.log(error);
+      showToast({
+        title:
+          'Sync gagal',
+        message:
+          error?.message ||
+          'Periksa status tenant, toko, terminal, dan koneksi backend.',
+        tone:
+          'error',
+      });
 
     } finally {
 
@@ -102,24 +190,26 @@ SyncDashboardPage() {
   async function
     handleForceRetry(id) {
 
-      await forceRetryTransaction(id);
+      await forceRetryTransaction(
+        id,
+        context
+      );
 
       await loadTransactions();
 
   }
 
-  async function
+  function
       handleDelete(trx) {
 
-        const confirmDelete =
+        setDeleteTarget(trx);
 
-          confirm(
+    }
 
-            `Delete transaction ${trx.invoice_no}?`
+  async function
+      confirmDeleteTransaction() {
 
-          );
-
-        if (!confirmDelete) {
+        if (!deleteTarget) {
 
           return;
 
@@ -128,94 +218,73 @@ SyncDashboardPage() {
         try {
 
           await deleteTransaction(
-            trx.id
+            deleteTarget.id,
+            context
           );
 
           await addAuditLog(
 
-            trx.transaction_uuid,
+            deleteTarget.transaction_uuid,
 
-            'TRANSACTION_DELETED'
+            'TRANSACTION_DELETED',
+
+            null,
+
+            context
 
           );
 
           await loadTransactions();
 
-        } catch (error) {
+          setDeleteTarget(null);
 
-          console.log(error);
-
-        }
+        } catch {}
 
     }
 
+  const statusSummary =
+    countTransactionsByCategory(
+      transactions
+    );
+
+  const countEffectiveStatus =
+    (statuses) =>
+      transactions.filter(
+        (trx) =>
+          statuses.includes(
+            getEffectiveTransactionStatus(trx)
+          )
+      ).length;
+
   const pendingCount =
-
-    transactions.filter(
-
-      (trx) =>
-
-        trx.sync_status ===
-        'pending'
-
-    ).length;
+    statusSummary.pending +
+    statusSummary.void_pending;
 
   const retryCount =
-
-    transactions.filter(
-
-      (trx) =>
-
-        trx.sync_status ===
-        'retry'
-
-    ).length;
+    countEffectiveStatus([
+      'retry',
+      'void_retry',
+    ]);
 
   const conflictCount =
+    statusSummary.conflict;
 
-    transactions.filter(
-
-      (trx) =>
-
-        trx.sync_status ===
-        'conflict'
-
-    ).length;
+  const blockedCount =
+    statusSummary.blocked;
 
   const syncedCount =
-
-    transactions.filter(
-
-      (trx) =>
-
-        trx.sync_status ===
-        'synced'
-
-    ).length;
+    statusSummary.synced;
 
     const failedCount =
-
-    transactions.filter(
-
-      (trx) =>
-
-        trx.sync_status ===
-        'failed'
-
-    ).length;
+      statusSummary.failed;
 
     const syncingCount =
+      countEffectiveStatus([
+        'syncing',
+        'void_syncing',
+      ]);
 
-      transactions.filter(
-
-        (trx) =>
-
-          trx.sync_status ===
-          'syncing'
-
-    ).length;
-
-    const totalCount = transactions.length;
+    const totalCount = statusSummary.total;
 
           const filteredTransactions =
 
@@ -227,32 +296,47 @@ SyncDashboardPage() {
 
               trx =>
 
-                trx.sync_status ===
-                filter
+                matchesTransactionStatusFilter(
+                  trx,
+                  filter
+                )
 
          );
 
   return (
 
-    <div
-      className="
-        p-6
-      "
-     >
+    <div className="min-h-screen bg-slate-50 px-3 pb-28 pt-4 sm:px-6 sm:pb-8">
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        title="Hapus transaksi lokal?"
+        message={`Invoice ${deleteTarget?.invoice_no || '-'} akan dihapus dari IndexedDB lokal.`}
+        confirmLabel="Hapus"
+        tone="danger"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={confirmDeleteTransaction}
+      />
 
       <div
         className="
+          mb-4
           flex
+          flex-col
+          items-start
           justify-between
-          items-center
-          mb-6
+          gap-3
+          sm:mb-6
+          sm:flex-row
+          sm:items-center
         "
        >
 
         <h1
           className="
-            text-3xl
+            text-xl
             font-bold
+            text-slate-950
+            sm:text-3xl
           "
         >
 
@@ -260,18 +344,23 @@ SyncDashboardPage() {
 
         </h1>
 
-<div className="flex gap-2">
+<div className="flex w-full gap-2 overflow-x-auto pb-1 sm:w-auto sm:flex-wrap sm:overflow-visible sm:pb-0">
 
   <button
 
     onClick={loadTransactions}
 
     className="
+      shrink-0
       bg-gray-600
       text-white
-      px-4
+      px-3
       py-2
-      rounded-lg
+      rounded-xl
+      text-xs
+      font-bold
+      sm:px-4
+      sm:text-sm
     "
 
   >
@@ -287,11 +376,16 @@ SyncDashboardPage() {
     disabled={loading}
 
     className="
+      shrink-0
       bg-blue-600
       text-white
-      px-4
+      px-3
       py-2
-      rounded-lg
+      rounded-xl
+      text-xs
+      font-bold
+      sm:px-4
+      sm:text-sm
     "
 
   >
@@ -317,11 +411,16 @@ SyncDashboardPage() {
       }
 
       className="
+        shrink-0
         bg-green-600
         text-white
-        px-4
+        px-3
         py-2
-        rounded-lg
+        rounded-xl
+        text-xs
+        font-bold
+        sm:px-4
+        sm:text-sm
       "
 
     >
@@ -329,6 +428,46 @@ SyncDashboardPage() {
       Export Excel
 
   </button>
+
+  <Link
+    to="/"
+    className="
+      shrink-0
+      bg-blue-600
+      text-white
+      px-3
+      py-2
+      rounded-xl
+      text-xs
+      font-bold
+      sm:px-4
+      sm:text-sm
+    "
+  >
+
+    Main POS
+
+  </Link>
+
+  <Link
+    to="/conflicts"
+    className="
+      shrink-0
+      bg-red-600
+      text-white
+      px-3
+      py-2
+      rounded-xl
+      text-xs
+      font-bold
+      sm:px-4
+      sm:text-sm
+    "
+  >
+
+    Conflicts
+
+  </Link>
   
 </div>
 
@@ -336,10 +475,14 @@ SyncDashboardPage() {
 
     <div
         className="
+          mb-4
           grid
-          grid-cols-7
-          gap-4
-          mb-6
+          grid-cols-2
+          gap-2
+          sm:mb-6
+          sm:grid-cols-4
+          sm:gap-4
+          xl:grid-cols-8
         "
       >
 
@@ -348,8 +491,9 @@ SyncDashboardPage() {
         <div
           className="
             bg-yellow-100
-            p-4
-            rounded-xl
+            rounded-2xl
+            p-3
+            sm:p-4
           "
         >
 
@@ -361,8 +505,9 @@ SyncDashboardPage() {
 
           <div
             className="
-              text-3xl
+              text-2xl
               font-bold
+              sm:text-3xl
             "
           >
 
@@ -377,8 +522,9 @@ SyncDashboardPage() {
         <div
           className="
             bg-orange-100
-            p-4
-            rounded-xl
+            rounded-2xl
+            p-3
+            sm:p-4
           "
         >
 
@@ -390,8 +536,9 @@ SyncDashboardPage() {
 
           <div
             className="
-              text-3xl
+              text-2xl
               font-bold
+              sm:text-3xl
             "
           >
 
@@ -399,7 +546,7 @@ SyncDashboardPage() {
 
           </div>
 
-// Conflict
+
 
         </div>
 
@@ -408,8 +555,9 @@ SyncDashboardPage() {
         <div
           className="
             bg-red-100
-            p-4
-            rounded-xl
+            rounded-2xl
+            p-3
+            sm:p-4
           "
         >
 
@@ -421,12 +569,44 @@ SyncDashboardPage() {
 
           <div
             className="
-              text-3xl
+              text-2xl
               font-bold
+              sm:text-3xl
             "
           >
 
             {conflictCount}
+
+          </div>
+
+        </div>
+
+        {/* Blocked */}
+
+        <div
+          className="
+            bg-rose-100
+            rounded-2xl
+            p-3
+            sm:p-4
+          "
+        >
+
+          <div className="text-sm">
+
+            Blocked
+
+          </div>
+
+          <div
+            className="
+              text-2xl
+              font-bold
+              sm:text-3xl
+            "
+          >
+
+            {blockedCount}
 
           </div>
 
@@ -437,8 +617,9 @@ SyncDashboardPage() {
         <div
           className="
             bg-gray-200
-            p-4
-            rounded-xl
+            rounded-2xl
+            p-3
+            sm:p-4
           "
         >
 
@@ -450,8 +631,9 @@ SyncDashboardPage() {
 
           <div
             className="
-              text-3xl
+              text-2xl
               font-bold
+              sm:text-3xl
             "
           >
 
@@ -466,8 +648,9 @@ SyncDashboardPage() {
         <div
           className="
             bg-green-100
-            p-4
-            rounded-xl
+            rounded-2xl
+            p-3
+            sm:p-4
           "
         >
 
@@ -479,8 +662,9 @@ SyncDashboardPage() {
 
           <div
             className="
-              text-3xl
+              text-2xl
               font-bold
+              sm:text-3xl
             "
           >
 
@@ -520,8 +704,9 @@ SyncDashboardPage() {
         <div
             className="
               bg-slate-100
-              p-4
-              rounded-xl
+              rounded-2xl
+              p-3
+              sm:p-4
             "
           >
 
@@ -533,8 +718,9 @@ SyncDashboardPage() {
 
             <div
               className="
-                text-3xl
+                text-2xl
                 font-bold
+                sm:text-3xl
               "
             >
 
@@ -548,10 +734,18 @@ SyncDashboardPage() {
 
       <div
         className="
+          -mx-3
+          mb-4
           flex
           gap-2
-          mb-6
-          flex-wrap
+          overflow-x-auto
+          px-3
+          pb-1
+          sm:mx-0
+          sm:mb-6
+          sm:flex-wrap
+          sm:overflow-visible
+          sm:px-0
         "
        >
 
@@ -563,13 +757,19 @@ SyncDashboardPage() {
 
             'pending',
 
-            'retry',
+            'void_pending',
 
             'conflict',
 
+            'blocked',
+
             'failed',
 
-            'synced'
+            'synced',
+
+            'void',
+
+            'unknown'
 
           ].map(status => (
 
@@ -585,9 +785,14 @@ SyncDashboardPage() {
 
               className={`
 
-                px-4
+                shrink-0
+                px-3
                 py-2
-                rounded-lg
+                rounded-full
+                text-xs
+                font-bold
+                sm:px-4
+                sm:text-sm
 
                 ${
 
@@ -595,7 +800,7 @@ SyncDashboardPage() {
 
                   ? 'bg-blue-600 text-white'
 
-                  : 'bg-gray-200'
+                  : 'bg-white text-slate-600 border border-slate-200'
 
                 }
 
@@ -628,18 +833,24 @@ SyncDashboardPage() {
                 key={trx.id}
 
                 className="
+                  rounded-2xl
+                  border
+                  border-slate-200
                   bg-white
-                  shadow
-                  rounded-xl
-                  p-4
+                  p-3
+                  shadow-sm
+                  sm:p-4
                 "
               >
 
                 <div
                   className="
                     flex
+                    flex-col
                     justify-between
                     mb-2
+                    gap-2
+                    sm:flex-row
                   "
                 >
 
@@ -648,6 +859,10 @@ SyncDashboardPage() {
                     <div
                       className="
                         font-bold
+                        text-sm
+                        leading-tight
+                        text-slate-950
+                        sm:text-base
                       "
                     >
 
@@ -659,8 +874,9 @@ SyncDashboardPage() {
 
                     <div
                       className="
-                        text-sm
-                        text-gray-500
+                        text-xs
+                        text-slate-500
+                        sm:text-sm
                       "
                     >
 
@@ -674,41 +890,18 @@ SyncDashboardPage() {
 
                   <div
                     className={`
-                      px-3
+                      w-fit
+                      px-2.5
                       py-1
-                      rounded-lg
-                      text-white
-                      text-sm
-
-                      ${
-                        trx.sync_status === 'synced'
-
-                          ? 'bg-green-500'
-
-                        : trx.sync_status === 'retry'
-
-                          ? 'bg-orange-500'
-
-                        : trx.sync_status === 'conflict'
-
-                          ? 'bg-red-500'
-
-                        : trx.sync_status === 'failed'
-
-                          ? 'bg-gray-700'
-
-                        : trx.sync_status === 'syncing'
-
-                          ? 'bg-blue-500'
-
-                        : 'bg-yellow-500'
-                      }
+                      rounded-full
+                      text-[11px]
+                      font-bold
+                      sm:text-sm
+                      ${getTransactionStatusClass(trx)}
                     `}
                   >
 
-                    {
-                      trx.sync_status
-                    }
+                    {getTransactionStatusLabel(trx)}
 
                   </div>
 
@@ -716,7 +909,9 @@ SyncDashboardPage() {
 
                 <div
                   className="
-                    text-sm
+                    text-xs
+                    text-slate-600
+                    sm:text-sm
                   "
                  >
 
@@ -733,6 +928,7 @@ SyncDashboardPage() {
                 <div
                   className="
                     flex
+                    flex-wrap
                     gap-2
                     mt-3
                   "
@@ -746,9 +942,11 @@ SyncDashboardPage() {
                       bg-blue-500
                       text-white
                       px-3
-                      py-1
-                      rounded-lg
-                      text-sm
+                      py-1.5
+                      rounded-xl
+                      text-xs
+                      font-bold
+                      sm:text-sm
                     "
 
                   >
@@ -766,18 +964,34 @@ SyncDashboardPage() {
                       }
 
                       disabled={
-                        trx.sync_status !== 'conflict'
+                        ![
+                          'conflict',
+                          'blocked',
+                          'void_blocked',
+                          'void_failed'
+                        ].includes(
+                          trx.sync_status
+                        )
                       }
 
                       className={`
                         px-3
-                        py-1
-                        rounded-lg
-                        text-sm
+                        py-1.5
+                        rounded-xl
+                        text-xs
+                        font-bold
                         text-white
+                        sm:text-sm
 
                         ${
-                          trx.sync_status === 'conflict'
+                          [
+                            'conflict',
+                            'blocked',
+                            'void_blocked',
+                            'void_failed'
+                          ].includes(
+                            trx.sync_status
+                          )
                           ? 'bg-red-500'
                           : 'bg-gray-400 cursor-not-allowed'
                         }
@@ -799,11 +1013,13 @@ SyncDashboardPage() {
                     }
 
                     className={`
-                    text-sm
+                    text-xs
                       px-3
-                      py-1
-                      rounded-lg
+                      py-1.5
+                      rounded-xl
+                      font-bold
                       text-white
+                      sm:text-sm
 
                       ${
                         trx.sync_status === 'failed'

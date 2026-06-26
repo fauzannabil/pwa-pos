@@ -1,8 +1,46 @@
-import { useEffect, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useState
+} from 'react';
 
 import { getAuditLogs } from '../services/auditService';
+import {
+  getTransactionScope
+} from '../services/transactionService';
+import useAuthStore from '../stores/authStore';
 
 export default function AuditLogPage() {
+
+  const tenant =
+    useAuthStore(
+      (state) =>
+        state.tenant
+    );
+
+  const store =
+    useAuthStore(
+      (state) =>
+        state.store
+    );
+
+  const terminal =
+    useAuthStore(
+      (state) =>
+        state.terminal
+    );
+
+  const context =
+    useMemo(() =>
+      getTransactionScope({
+      tenant,
+      store,
+      terminal,
+    }), [
+      tenant,
+      store,
+      terminal
+    ]);
 
   const [logs, setLogs] = useState([]);
   const [search, setSearch] = useState('');
@@ -26,7 +64,10 @@ export default function AuditLogPage() {
 
     async function loadLogs() {
 
-      const data = await getAuditLogs();
+      const data =
+        await getAuditLogs(
+          context
+        );
 
       setLogs(data);
 
@@ -44,7 +85,7 @@ export default function AuditLogPage() {
 
     return () => clearInterval(interval);
 
-  }, []);
+  }, [context]);
 
   return (
 

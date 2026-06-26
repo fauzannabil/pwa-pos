@@ -1,6 +1,8 @@
 import {
 
   syncPendingTransactions
+  ,
+  syncPendingVoids
 
 } from './transactionService';
 
@@ -10,25 +12,57 @@ import {
 
 } from './productService';
 
+import useAuthStore
+  from '../stores/authStore';
+
+import {
+  getTransactionScope
+} from './transactionService';
+import {
+  getApiUrl
+} from '../config/apiConfig';
+import {
+  dispatchSaasAccessBlocked,
+  validatePosContext,
+  validateSyncContext
+} from '../utils/saasContext';
+
 let syncInterval = null;
 
 let syncRunning = false;
+let lastContextAlertAt = 0;
+
+function notifyContextBlocked(message) {
+
+  const now =
+    Date.now();
+
+  if (now - lastContextAlertAt < 60000) {
+
+    return;
+
+  }
+
+  lastContextAlertAt = now;
+
+  dispatchSaasAccessBlocked({
+    title:
+      'Auto sync tertahan',
+    message,
+  });
+
+}
 
 async function
 isBackendReachable() {
 
   try {
 
-    const API_URL =
-
-      import.meta.env
-        .VITE_API_URL;
-
     const response =
 
       await fetch(
 
-        `${API_URL}/ping`,
+        getApiUrl('ping'),
 
         {
           method: 'GET',
@@ -38,7 +72,7 @@ isBackendReachable() {
 
     return response.ok;
 
-  } catch (error) {
+  } catch {
 
     return false;
 
@@ -61,8 +95,36 @@ runAutoSync() {
 
   if (!navigator.onLine) {
 
-      console.log(
-        'Browser offline'
+      return;
+
+    }
+
+    const {
+      token,
+      tenant,
+      store,
+      terminal,
+      subscription,
+    } = useAuthStore.getState();
+
+    if (!token) {
+
+      return;
+
+    }
+
+    const posValidation =
+      validatePosContext({
+        tenant,
+        store,
+        terminal,
+        subscription,
+      });
+
+    if (!posValidation.ok) {
+
+      notifyContextBlocked(
+        posValidation.reason
       );
 
       return;
@@ -79,10 +141,6 @@ runAutoSync() {
 
     if (!backendOnline) {
 
-        console.log(
-          'Backend unreachable'
-        );
-
         return;
 
     }
@@ -91,32 +149,50 @@ runAutoSync() {
 
   try {
 
-    console.log(
-      'Running auto sync...'
-    );
-
     // sync transactions
 
-    const synced =
+    const context =
+      getTransactionScope({
+        tenant,
+        store,
+        terminal,
+      });
 
-      await syncPendingTransactions();
+    const syncValidation =
+      validateSyncContext(
+        context
+      );
 
-    // refresh products
+    if (!syncValidation.ok) {
 
-    if (synced > 0) {
+      notifyContextBlocked(
+        syncValidation.reason
+      );
 
-      await syncProducts();
+      return;
 
     }
 
-    console.log(
-      'Auto sync done:',
-      synced
-    );
+    const synced =
 
-  } catch (error) {
+      await syncPendingTransactions(context);
 
-    console.log(error);
+    const voidSynced =
+
+      await syncPendingVoids(context);
+
+    // refresh products
+
+    if (
+      synced > 0 ||
+      voidSynced > 0
+    ) {
+
+      await syncProducts(context);
+
+    }
+
+  } catch {
 
   } finally {
 
@@ -145,10 +221,6 @@ startAutoSync() {
 
     async () => {
 
-      console.log(
-        'Back online'
-      );
-
       await runAutoSync();
 
     }
@@ -167,10 +239,6 @@ startAutoSync() {
 
     30000 // 30 sec
 
-  );
-
-  console.log(
-    'Auto sync started'
   );
 
 }

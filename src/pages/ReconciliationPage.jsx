@@ -1,5 +1,7 @@
 import {
 useEffect,
+useCallback,
+useMemo,
 useState
 } from 'react';
 
@@ -13,7 +15,48 @@ import {
 Link
 } from 'react-router-dom';
 
+import useAuthStore
+from '../stores/authStore';
+
+import {
+getTransactionScope
+} from '../services/transactionService';
+
+import {
+showToast
+} from '../utils/uiFeedback';
+
 export default function ReconciliationPage() {
+
+const tenant =
+useAuthStore(
+  (state) =>
+    state.tenant
+);
+
+const store =
+useAuthStore(
+  (state) =>
+    state.store
+);
+
+const terminal =
+useAuthStore(
+  (state) =>
+    state.terminal
+);
+
+const context =
+useMemo(() =>
+  getTransactionScope({
+    tenant,
+    store,
+    terminal,
+  }), [
+    tenant,
+    store,
+    terminal
+  ]);
 
 const [data, setData] =
 useState([]);
@@ -33,12 +76,15 @@ useState({
 });
 
 
-async function loadData() {
+const loadData =
+useCallback(async () => {
 
 
 const result =
 
-  await getStockDifferences();
+  await getStockDifferences(
+    context
+  );
 
 setData(result);
 
@@ -88,7 +134,7 @@ setSummary({
 });
 
 
-}
+}, [context]);
 
 async function handleRepair(productId) {
 
@@ -96,16 +142,23 @@ async function handleRepair(productId) {
 const success =
 
   await repairLocalStock(
-    productId
+    productId,
+    null,
+    context
   );
 
 if (success) {
 
   await loadData();
 
-  alert(
-    'Stock repaired'
-  );
+  showToast({
+    title:
+      'Stock repaired',
+    message:
+      'Stok lokal produk sudah disesuaikan.',
+    tone:
+      'success',
+  });
 
 }
 
@@ -117,15 +170,20 @@ async function handleRepairAll() {
 
 const total =
 
-  await repairAllStocks();
+  await repairAllStocks(
+    context
+  );
 
 await loadData();
 
-alert(
-
-  `${total} products repaired`
-
-);
+showToast({
+  title:
+    'Repair selesai',
+  message:
+    `${total} products repaired`,
+  tone:
+    'success',
+});
 
 
 }
@@ -136,7 +194,7 @@ useEffect(() => {
 loadData();
 
 
-}, []);
+}, [loadData]);
 
 return (
 
@@ -181,7 +239,7 @@ return (
       </Link>
 
       <Link
-        to="/pos"
+        to="/"
         className="
           bg-blue-600
           text-white

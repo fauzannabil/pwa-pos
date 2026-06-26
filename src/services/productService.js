@@ -2,6 +2,11 @@ import api from '../api/api';
 
 import db from '../db/db';
 
+import {
+  getApiErrorMessage,
+  validateSyncContext
+} from '../utils/saasContext';
+
 /*
 |--------------------------------
 | Convert Image To Base64
@@ -51,16 +56,119 @@ async function imageToBase64(url) {
       }
     );
 
-  } catch (error) {
-
-    console.log(
-      'Image cache failed:',
-      error
-    );
+  } catch {
 
     return null;
 
   }
+
+}
+
+function isCacheableProductImage(url) {
+
+  if (!url) {
+
+    return false;
+
+  }
+
+  return !url
+    .toLowerCase()
+    .includes('/default.jpg');
+
+}
+
+function hasProductScope(context = null) {
+
+  return Boolean(
+    context?.tenant_id &&
+    context?.store_id
+  );
+
+}
+
+function sameId(a, b) {
+
+  return String(a) === String(b);
+
+}
+
+function productSyncCursorKey(context = null) {
+
+  if (!hasProductScope(context)) {
+
+    return 'products_updated_at';
+
+  }
+
+  return `products_updated_at:${context.tenant_id}:${context.store_id}`;
+
+}
+
+function matchesProductScope(product, context = null) {
+
+  if (!hasProductScope(context)) {
+
+    return true;
+
+  }
+
+  return Boolean(
+    product?.tenant_id &&
+    product?.store_id &&
+    sameId(product.tenant_id, context.tenant_id) &&
+    sameId(product.store_id, context.store_id)
+  );
+
+}
+
+function filterProductsByScope(products, context = null) {
+
+  return (products || []).filter(
+    (product) =>
+      matchesProductScope(
+        product,
+        context
+      )
+  );
+
+}
+
+async function getScopedProductSyncCursor(context = null) {
+
+  const record =
+
+    await db.sync_meta.get(
+      productSyncCursorKey(context)
+    );
+
+  return record?.value || null;
+
+}
+
+async function setProductSyncCursor(
+  value,
+  context = null
+) {
+
+  if (!value) {
+
+    return;
+
+  }
+
+  await db.sync_meta.put({
+
+    key:
+      productSyncCursorKey(context),
+
+    value,
+
+    updated_at:
+      new Date()
+        .toISOString(),
+
+  });
 
 }
 
@@ -70,13 +178,22 @@ async function imageToBase64(url) {
 |--------------------------------
 */
 
-export async function syncProducts() {
+export async function syncProducts(context = null) {
+
+  const syncValidation =
+    validateSyncContext(
+      context
+    );
+
+  if (!syncValidation.ok) {
+
+    throw new Error(
+      syncValidation.reason
+    );
+
+  }
 
   if (!navigator.onLine) {
-
-    console.log(
-      'Offline mode'
-    );
 
     return;
 
@@ -84,9 +201,59 @@ export async function syncProducts() {
 
   try {
 
+    const localProducts =
+
+      filterProductsByScope(
+
+        await db.products
+          .toArray(),
+
+        context
+
+      );
+
+    const localProductMap =
+
+      new Map(
+
+        localProducts.map(
+          (product) => [
+            product.id,
+            product
+          ]
+        )
+
+      );
+
+    const shouldRefreshCategoryNames =
+
+      localProducts.some(
+        (product) =>
+          product.category_id &&
+          !product.category_name &&
+          !product.category?.name
+      );
+
+    const lastUpdatedAt =
+
+      shouldRefreshCategoryNames
+        ? null
+        : await getScopedProductSyncCursor(
+            context
+          );
+
     const response =
       await api.get(
-        '/products'
+        '/products',
+        {
+          params:
+            lastUpdatedAt
+              ? {
+                  updated_after:
+                    lastUpdatedAt
+                }
+              : {}
+        }
       );
 
     /*
@@ -101,18 +268,63 @@ export async function syncProducts() {
       response.data.data;
 
     const products = [];
+    const deletedProductIds = [];
+    const updatedAtValues = [];
 
     for (
       const product
       of apiProducts
     ) {
 
+      if (product.updated_at) {
+
+        updatedAtValues.push(
+          product.updated_at
+        );
+
+      }
+
+      if (product.deleted_at) {
+
+        deletedProductIds.push(
+          product.id
+        );
+
+        continue;
+
+      }
+
       let imageBase64 =
-        null;
+        localProductMap.get(
+          product.id
+        )?.image || null;
+
+      const existingProduct =
+
+        localProductMap.get(
+          product.id
+        );
+
+      const imageChanged =
+
+        isCacheableProductImage(
+          product.image
+        ) &&
+
+        product.image !==
+          existingProduct?.image_url;
 
       try {
 
-        if (product.image) {
+        if (
+          imageChanged ||
+          (
+            isCacheableProductImage(
+              product.image
+            ) &&
+            !imageBase64
+          )
+        ) {
 
           imageBase64 =
 
@@ -122,14 +334,7 @@ export async function syncProducts() {
 
         }
 
-      } catch (error) {
-
-        console.log(
-          'Image failed:',
-          product.id
-        );
-
-      }
+      } catch {}
 
       products.push({
 
@@ -138,26 +343,65 @@ export async function syncProducts() {
         image:
           imageBase64,
 
+        image_url:
+          product.image,
+
+        last_synced_at:
+          new Date()
+            .toISOString(),
+
       });
 
     }
 
-    await db.products.clear();
+    if (
+      products.length > 0
+    ) {
 
-    await db.products.bulkPut(
-      products
-    );
+      await db.products.bulkPut(
+        products
+      );
 
-    console.log(
-      'Products synced'
+    }
+
+    if (
+      deletedProductIds.length > 0
+    ) {
+
+      await db.products.bulkDelete(
+        deletedProductIds
+      );
+
+    }
+
+    const nextCursor =
+
+      updatedAtValues
+        .sort()
+        .at(-1);
+
+    await setProductSyncCursor(
+      nextCursor,
+      context
     );
 
   } catch (error) {
 
-    console.log(
-      'SYNC ERROR:',
-      error
-    );
+    const errorMessage =
+      getApiErrorMessage(
+        error,
+        'Product sync failed'
+      );
+
+    if (
+      [402, 403].includes(
+        error?.response?.status
+      )
+    ) {
+
+      throw error;
+
+    }
 
   }
 
@@ -170,10 +414,16 @@ export async function syncProducts() {
 */
 
 export async function
-getLocalProducts() {
+getLocalProducts(context = null) {
 
-  return await db.products
-    .toArray();
+  return filterProductsByScope(
+
+    await db.products
+      .toArray(),
+
+    context
+
+  );
 
 }
 
@@ -184,7 +434,11 @@ getLocalProducts() {
 */
 
 export async function
-reduceLocalStock(items, invoiceNo = null) {
+reduceLocalStock(
+  items,
+  invoiceNo = null,
+  context = {}
+) {
 
   for (const item of items) {
 
@@ -197,6 +451,20 @@ reduceLocalStock(items, invoiceNo = null) {
     if (!product) {
 
       continue;
+
+    }
+
+    if (
+      hasProductScope(context) &&
+      !matchesProductScope(
+        product,
+        context
+      )
+    ) {
+
+      throw new Error(
+        'Produk tidak sesuai dengan tenant/store aktif.'
+      );
 
     }
 
@@ -220,12 +488,24 @@ reduceLocalStock(items, invoiceNo = null) {
       Number(item.product_id),
 
       {
-        stock: newStock
+        stock: newStock,
+        updated_at:
+          new Date()
+            .toISOString(),
       }
 
     );
 
     await db.stock_movements.add({
+
+      tenant_id:
+        context.tenant_id || product.tenant_id || null,
+
+      store_id:
+        context.store_id || null,
+
+      terminal_id:
+        context.terminal_id || null,
 
       product_id:
         Number(item.product_id),

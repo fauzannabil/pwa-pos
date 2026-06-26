@@ -17,7 +17,9 @@ import {
 } from '../../services/transactionService';
 
 export default function
-HourlySalesChart() {
+HourlySalesChart({
+  context = null
+}) {
 
   const [data,
     setData] =
@@ -25,19 +27,21 @@ HourlySalesChart() {
 
   useEffect(() => {
 
-    async function loadData() {
+    const loadData = async () => {
 
       const result =
 
-        await getHourlySales();
+        await getHourlySales(
+          context
+        );
 
       setData(result);
 
-    }
+    };
 
     loadData();
 
-  }, []);
+  }, [context]);
 
   return (
 

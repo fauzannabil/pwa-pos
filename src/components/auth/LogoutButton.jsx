@@ -2,10 +2,9 @@ import { useNavigate } from 'react-router-dom';
 
 import useAuthStore
   from '../../stores/authStore';
-
-import {
-  logout
-} from '../../services/authService';
+import { useState } from 'react';
+import useCartStore
+  from '../../stores/cartStore';
 
 export default function LogoutButton() {
 
@@ -16,25 +15,39 @@ export default function LogoutButton() {
       (state) => state.logout
     );
 
+  const resetCartScope =
+    useCartStore(
+      (state) => state.resetCartScope
+    );
+
+  const [errorMessage, setErrorMessage] =
+    useState('');
+
   async function handleLogout() {
 
     try {
 
-      await logout();
+      setErrorMessage('');
+
+      await authLogout();
+
+      resetCartScope();
+
+      navigate('/login');
 
     } catch (error) {
 
-      console.log(error);
+      setErrorMessage(
+        error?.message ||
+          'Logout gagal. Pastikan data offline sudah tersinkron.'
+      );
 
     }
-
-    authLogout();
-
-    navigate('/login');
 
   }
 
   return (
+    <div className="flex w-full flex-col items-stretch gap-2 sm:items-end">
 
     <button
       onClick={handleLogout}
@@ -46,12 +59,21 @@ export default function LogoutButton() {
         py-2
         rounded-lg
         text-sm
+        font-bold
       "
     >
 
       Logout
 
     </button>
+
+    {errorMessage && (
+      <div className="max-w-xs rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-right text-xs font-medium text-red-700 shadow-sm">
+        {errorMessage}
+      </div>
+    )}
+
+    </div>
 
   );
 

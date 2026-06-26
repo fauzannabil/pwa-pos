@@ -1,6 +1,7 @@
 import {
 
   useEffect,
+  useCallback,
   useState,
 
 } from 'react';
@@ -24,7 +25,9 @@ import {
 } from '../../services/transactionService';
 
 export default function
-SalesChart() {
+SalesChart({
+  context = null
+}) {
 
   const [
 
@@ -33,22 +36,24 @@ SalesChart() {
 
   ] = useState([]);
 
-  async function
-  loadChart() {
+  const loadChart =
+    useCallback(async () => {
 
     const result =
 
-      await getWeeklySales();
+      await getWeeklySales(
+        context
+      );
 
     setData(result);
 
-  }
+  }, [context]);
 
   useEffect(() => {
 
     loadChart();
 
-  }, []);
+  }, [loadChart]);
 
   return (
 
